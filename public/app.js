@@ -10,6 +10,9 @@ const state = {
   tab: null,
   filters: { building: "", person: "", status: "active" },
   form: null,
+  plan: null,
+  advice: null,
+  dismissed: new Set(),
 };
 
 const STATUS_LABEL = { open: "Not started", in_progress: "Busy", waiting: "Waiting", done: "Fixed" };
@@ -55,6 +58,115 @@ function suggest(building, cat) {
   const local = state.config.team.find((t) => t.buildings.includes(building));
   if (cat === "water" && local && local.id === "paul") return "dadou";
   return local ? local.id : null;
+}
+
+// ---------- day planning
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const HORIZON = 60; // days looked ahead
+const jobMins = (j) => j.minutes || (state.config.categories.find((c) => c.id === j.category) || {}).minutes || 60;
+const fmtH = (m) => (m >= 60 ? Math.round(m / 6) / 10 + " h" : Math.round(m) + " min");
+const workers = () => state.config.team.filter((t) => !t.external);
+const dayOffOf = (id) => { const v = (state.config.settings.daysOff || {})[id]; return v === undefined ? null : v; };
+function dateAt(d, now = new Date()) { const x = new Date(now); x.setHours(12, 0, 0, 0); x.setDate(x.getDate() + d); return x; }
+function dayLabel(d, short) {
+  if (d === 0) return "Today";
+  if (d === 1) return "Tomorrow";
+  const x = dateAt(d);
+  return short ? DAYS[x.getDay()].slice(0, 3) + " " + x.getDate() : DAYS[x.getDay()] + " " + x.getDate() + " " + x.toLocaleString([], { month: "short" });
+}
+function capacity(id, d, now) {
+  if (dayOffOf(id) === dateAt(d, now).getDay()) return 0;
+  const { start, end } = state.config.work;
+  if (d > 0) return (end - start) * 60;
+  const n = now.getHours() * 60 + now.getMinutes();
+  return Math.max(0, Math.min((end - start) * 60, end * 60 - Math.max(n, start * 60)));
+}
+const planOrder = (a, b) => ((b.status === "in_progress") - (a.status === "in_progress")) || (b.blocking - a.blocking) || (a.createdAt - b.createdAt);
+
+// Fills each person's working days with their jobs, most urgent first.
+function buildPlan(now = new Date()) {
+  const plan = { person: {}, jobDay: {}, now };
+  for (const w of workers()) {
+    const queue = state.jobs.filter((j) => isActive(j) && j.status !== "waiting" && j.assignee === w.id).sort(planOrder);
+    const used = [], jobsByDay = [];
+    let d = 0, rem = capacity(w.id, 0, now);
+    for (const j of queue) {
+      let m = jobMins(j), first = true;
+      while (m > 0 && d < HORIZON) {
+        if (rem <= 0) { d++; rem = capacity(w.id, d, now); continue; }
+        if (first) { plan.jobDay[j.id] = d; first = false; }
+        const t = Math.min(m, rem);
+        rem -= t; m -= t;
+        used[d] = (used[d] || 0) + t;
+        (jobsByDay[d] = jobsByDay[d] || []).push(j);
+      }
+    }
+    const lastDay = queue.length ? Math.max(...queue.map((j) => plan.jobDay[j.id] ?? 0)) : -1;
+    plan.person[w.id] = { used, jobsByDay, lastDay };
+  }
+  return plan;
+}
+
+// Suggested moves and warnings for the manager.
+function advise(plan) {
+  const now = plan.now, moves = [], warnings = [];
+  const free = {};
+  for (const w of workers()) free[w.id] = [0, 1].map((d) => capacity(w.id, d, now) - (plan.person[w.id].used[d] || 0));
+  const canDo = (w, j) => w.can.includes(j.category);
+  const pickBest = (cands, j, d) => cands
+    .filter((w) => free[w.id][d] >= jobMins(j))
+    .sort((a, b) => (b.buildings.includes(j.building) - a.buildings.includes(j.building)) || (free[b.id][d] - free[a.id][d]))[0];
+
+  // 1. jobs nobody has yet
+  const unassigned = state.jobs.filter((j) => isActive(j) && !j.assignee).sort(planOrder);
+  for (const j of unassigned) {
+    const cands = workers().filter((w) => canDo(w, j));
+    let done = false;
+    for (const d of [0, 1]) {
+      const q = pickBest(cands, j, d);
+      if (q) {
+        moves.push({ job: j, to: q.id, why: `Not assigned yet. ${q.name} has ${fmtH(free[q.id][d])} free ${d ? "tomorrow" : "today"}.` });
+        free[q.id][d] -= jobMins(j);
+        done = true;
+        break;
+      }
+    }
+    if (!done && cands.length) {
+      const q = cands.sort((a, b) => plan.person[a.id].lastDay - plan.person[b.id].lastDay)[0];
+      moves.push({ job: j, to: q.id, why: `Not assigned yet. ${q.name} has the shortest list.` });
+    }
+  }
+
+  // 2. someone is booked into later days while someone else has free time sooner
+  for (const p of workers()) {
+    const later = state.jobs
+      .filter((j) => j.assignee === p.id && j.status === "open" && (plan.jobDay[j.id] ?? 0) > 0)
+      .sort(planOrder);
+    for (const j of later) {
+      const jd = plan.jobDay[j.id];
+      for (const d of [0, 1].filter((x) => x < jd)) {
+        const q = pickBest(workers().filter((w) => w.id !== p.id && canDo(w, j)), j, d);
+        if (q) {
+          moves.push({ job: j, from: p.id, to: q.id,
+            why: `${p.name} is booked until ${dayLabel(plan.person[p.id].lastDay).toLowerCase()} — this job would wait until ${dayLabel(jd).toLowerCase()}. ${q.name} has ${fmtH(free[q.id][d])} free ${d ? "tomorrow" : "today"}.` });
+          free[q.id][d] -= jobMins(j);
+          break;
+        }
+      }
+    }
+  }
+
+  // 3. warnings
+  const noDaysOff = workers().filter((w) => dayOffOf(w.id) === null);
+  if (noDaysOff.length) warnings.push({ level: "info", text: `Days off not set for ${noDaysOff.map((w) => w.name).join(", ")} — the plan assumes they work every day. Set them below.` });
+  for (const w of workers()) {
+    const cap = capacity(w.id, 0, now);
+    const booked = plan.person[w.id].used[0] || 0;
+    if (dayOffOf(w.id) === dateAt(0, now).getDay()) { warnings.push({ level: "info", text: `${w.name} is off today.` }); continue; }
+    if (cap >= 120 && booked < cap / 2) warnings.push({ level: "amber", text: `${w.name} is not fully allocated: ${fmtH(booked)} of work booked, ${fmtH(cap - booked)} still free today.` });
+    if (plan.person[w.id].lastDay >= 2) warnings.push({ level: "red", text: `${w.name} is over-allocated: booked until ${dayLabel(plan.person[w.id].lastDay).toLowerCase()}.` });
+  }
+  return { moves: moves.slice(0, 10), warnings };
 }
 
 async function compressPhoto(file) {
@@ -144,8 +256,14 @@ function render() {
     ? `<div class="warn"><b>Test mode:</b> demo PINs are switched on. Set your own staff PINs in Netlify before real use.</div>`
     : "";
 
+  state.plan = buildPlan();
+  if (state.user.role === "manager") {
+    state.advice = advise(state.plan);
+    state.advice.moves = state.advice.moves.filter((m) => !state.dismissed.has(m.job.id + ">" + m.to));
+  }
   const tabs = [];
   if (state.user.role === "manager") tabs.push(["all", "All jobs", state.jobs.filter((j) => isActive(j) && !j.assignee).length]);
+  if (state.user.role === "manager") tabs.push(["planner", "Planner", state.advice.moves.length]);
   if (state.user.role === "handyman") tabs.push(["mine", "My jobs", state.jobs.filter((j) => isActive(j) && j.assignee === state.user.team).length]);
   tabs.push(["report", "Report a problem"]);
   if (state.user.role === "staff") tabs.push(["status", "Job status"]);
@@ -157,6 +275,7 @@ function render() {
   if (state.tab === "report") return renderReport();
   if (state.tab === "mine") return renderMine();
   if (state.tab === "status") return renderStatus();
+  if (state.tab === "planner") return renderPlanner();
   return renderAll();
 }
 
@@ -315,6 +434,8 @@ function jobCard(j) {
       ${j.blocking && j.status !== "done" ? `<span class="badge b-out">Room out of order</span>` : ""}
       <span class="badge b-${j.status}">${STATUS_LABEL[j.status]}</span>
       ${j.assignee ? `<span class="badge b-who">${esc(teamName(j.assignee) || j.assignee)}</span>` : `<span class="badge b-none">Not assigned</span>`}
+      ${j.status !== "done" ? `<span class="badge b-time">~${fmtH(jobMins(j))}</span>` : ""}
+      ${isActive(j) && state.plan && state.plan.jobDay[j.id] !== undefined ? `<span class="badge b-day">Planned: ${dayLabel(state.plan.jobDay[j.id])}</span>` : ""}
     </div>
     ${j.description ? `<div class="desc">${esc(j.description)}</div>` : ""}
     ${j.photo || j.afterPhoto ? `<div class="thumbs">
@@ -404,6 +525,10 @@ async function onAction(job, act) {
         <label class="f" for="mAssign">Who should fix it?</label>
         <select id="mAssign" class="t"><option value="">Not assigned</option>
           ${team.map((t) => `<option value="${t.id}" ${job.assignee === t.id ? "selected" : ""}>${esc(t.name)} — ${esc(t.skills)}</option>`).join("")}</select>
+        <label class="f" for="mTime">How long will it take?</label>
+        <select id="mTime" class="t">${[15, 30, 45, 60, 90, 120, 180, 240, 360, 480, 960, 1440]
+          .concat([jobMins(job)]).filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b)
+          .map((m) => `<option value="${m}" ${m === jobMins(job) ? "selected" : ""}>${m >= 480 ? fmtH(m) + " (" + Math.round(m / 48) / 10 + " day" + (m > 480 ? "s" : "") + ")" : fmtH(m)}</option>`).join("")}</select>
         <label class="f">Room status</label>
         <div class="yn">
           <button type="button" class="opt good ${!job.blocking ? "on" : ""}" data-blk="0">Can be sold</button>
@@ -423,9 +548,11 @@ async function onAction(job, act) {
         $("#mSave").onclick = async () => {
           try {
             const a = $("#mAssign").value || null;
+            const t = +$("#mTime").value;
             if (a !== (job.assignee || null)) await doUpdate(job, { action: "assign", assignee: a || "" });
             const fresh = state.jobs.find((j) => j.id === job.id);
             if (blk !== fresh.blocking) await doUpdate(fresh, { action: "blocking", blocking: blk });
+            if (t !== jobMins(job)) await doUpdate(state.jobs.find((j) => j.id === job.id), { action: "estimate", minutes: t });
             render();
           } catch (e) { toast(e.message); }
         };
@@ -443,15 +570,97 @@ function list(jobs, emptyMsg) {
 function renderMine() {
   const me = state.user.team;
   const myBuildings = (state.config.team.find((t) => t.id === me) || { buildings: [] }).buildings;
-  const mine = state.jobs.filter((j) => isActive(j) && j.assignee === me).sort(byPriority);
+  const plan = state.plan;
+  const planned = state.jobs.filter((j) => isActive(j) && j.assignee === me && j.status !== "waiting");
+  const waiting = state.jobs.filter((j) => j.status === "waiting" && j.assignee === me);
   const unassigned = state.jobs.filter((j) => isActive(j) && !j.assignee).sort((a, b) => (myBuildings.includes(b.building) - myBuildings.includes(a.building)) || byPriority(a, b));
   const doneRecent = state.jobs.filter((j) => j.status === "done" && j.assignee === me).sort((a, b) => b.doneAt - a.doneAt).slice(0, 5);
+  const off = dayOffOf(me) === new Date().getDay();
+  const groups = {};
+  for (const j of planned.sort(planOrder)) (groups[plan.jobDay[j.id] ?? 0] = groups[plan.jobDay[j.id] ?? 0] || []).push(j);
+  const used = plan.person[me] ? plan.person[me].used : [];
+  const dayHtml = Object.keys(groups).map(Number).sort((a, b) => a - b)
+    .map((d) => `<h3>${dayLabel(d)} <span style="text-transform:none;letter-spacing:0;font-weight:400">· ${fmtH(used[d] || 0)} of work</span></h3>${list(groups[d], "")}`).join("");
   $("#app").innerHTML = `
     <h2>My jobs</h2>
-    ${list(mine, "No jobs for you right now. 👍")}
+    ${off ? `<div class="goes-to" style="margin-bottom:10px">Today is your day off. These jobs are planned for your next working days.</div>` : ""}
+    ${dayHtml || `<div class="empty">No jobs for you right now. 👍</div>`}
+    ${waiting.length ? `<h3>Waiting for something</h3>${list(waiting, "")}` : ""}
     ${unassigned.length ? `<h3>Not assigned yet</h3>${list(unassigned, "")}` : ""}
     ${doneRecent.length ? `<h3>Recently fixed</h3>${list(doneRecent, "")}` : ""}`;
   wireCards();
+}
+
+function renderPlanner() {
+  const plan = state.plan;
+  const { moves, warnings } = state.advice;
+  const ws = workers();
+  const NDAYS = 7;
+  const full = (state.config.work.end - state.config.work.start) * 60;
+  const cell = (w, d) => {
+    const cap = d === 0 ? capacity(w.id, 0, plan.now) : capacity(w.id, d, plan.now);
+    if (dayOffOf(w.id) === dateAt(d).getDay()) return `<td class="off">Off</td>`;
+    const u = plan.person[w.id].used[d] || 0;
+    const pct = cap ? u / cap : u ? 1 : 0;
+    const cls = !cap ? "gone" : pct >= 0.99 ? "full" : pct >= 0.5 ? "mid" : d === 0 ? "low" : "free";
+    return `<td class="${cls}" data-w="${w.id}" data-d="${d}"><b>${u ? fmtH(u) : "–"}</b><small>${d === 0 ? "of " + fmtH(cap) + " left" : "of " + fmtH(full)}</small></td>`;
+  };
+  $("#app").innerHTML = `
+    <h2>Planner</h2>
+    ${warnings.length ? warnings.map((w) => `<div class="warnline ${w.level}">${esc(w.text)}</div>`).join("") : `<div class="warnline ok">Everyone has a full day and nobody is over-booked.</div>`}
+
+    <h3>Suggested moves</h3>
+    ${moves.length ? moves.map((m, i) => `<div class="card move">
+        <div class="where">${esc(m.job.building)} · ${esc(m.job.room)} <span class="muted" style="font-weight:400">— ${esc(catLabel(m.job.category))}, ~${fmtH(jobMins(m.job))}</span></div>
+        <div style="margin:4px 0 8px">${m.from ? `Move from <b>${esc(teamName(m.from))}</b> to <b>${esc(teamName(m.to))}</b>` : `Give to <b>${esc(teamName(m.to))}</b>`}${m.job.blocking ? ` <span class="badge b-out">Room out of order</span>` : ""}</div>
+        <div class="muted" style="font-size:14px">${esc(m.why)}</div>
+        <div class="row" style="margin-top:10px"><button class="btn gold small" data-move="${i}">${m.from ? "Move" : "Assign"} to ${esc(teamName(m.to))}</button><button class="btn light small" data-skip="${i}">Not now</button></div>
+      </div>`).join("") : `<div class="empty" style="padding:14px">No moves to suggest.</div>`}
+
+    <h3>This week</h3>
+    <div class="weekwrap"><table class="week">
+      <tr><th></th>${Array.from({ length: NDAYS }, (_, d) => `<th>${dayLabel(d, true)}</th>`).join("")}</tr>
+      ${ws.map((w) => `<tr><th>${esc(w.name)}</th>${Array.from({ length: NDAYS }, (_, d) => cell(w, d)).join("")}</tr>`).join("")}
+    </table></div>
+    <p class="muted" style="font-size:13px;margin:6px 4px">Hours of work booked each day (${state.config.work.start}:00–${state.config.work.end}:00). Tap a day to see the jobs. Jobs marked "Waiting" are not counted.</p>
+
+    <h3>Days off</h3>
+    <div class="card">
+      ${ws.map((w) => `<div class="dayoff"><span>${esc(w.name)}</span><select data-off="${w.id}">
+        <option value="">Not set</option>${DAYS.map((n, i) => `<option value="${i}" ${dayOffOf(w.id) === i ? "selected" : ""}>${n}</option>`).join("")}</select></div>`).join("")}
+      <button class="btn gold block" id="saveOff" style="margin-top:12px">Save days off</button>
+    </div>`;
+
+  document.querySelectorAll("[data-move]").forEach((b) => (b.onclick = async () => {
+    const m = moves[+b.dataset.move];
+    try { await doUpdate(m.job, { action: "assign", assignee: m.to }); toast(`${m.job.building} ${m.job.room} given to ${teamName(m.to)}`); } catch (e) { toast(e.message); }
+  }));
+  document.querySelectorAll("[data-skip]").forEach((b) => (b.onclick = () => {
+    const m = moves[+b.dataset.skip];
+    state.dismissed.add(m.job.id + ">" + m.to);
+    render();
+  }));
+  document.querySelectorAll("td[data-w]").forEach((td) => (td.onclick = () => {
+    const w = td.dataset.w, d = +td.dataset.d;
+    const js = (plan.person[w].jobsByDay[d] || []);
+    openSheet(`<h2>${esc(teamName(w))} — ${dayLabel(d)}</h2>${js.length ? js.map(jobCard).join("") : `<div class="empty">Nothing booked.</div>`}
+      <button class="btn light block" data-close>Close</button>`, (s) => {
+      s.querySelectorAll(".job").forEach((card) => {
+        const job = state.jobs.find((j) => j.id === card.dataset.id);
+        card.querySelectorAll("[data-act]").forEach((b) => (b.onclick = () => onAction(job, b.dataset.act)));
+      });
+    });
+  }));
+  $("#saveOff").onclick = async () => {
+    const daysOff = {};
+    document.querySelectorAll("[data-off]").forEach((s) => (daysOff[s.dataset.off] = s.value === "" ? null : +s.value));
+    try {
+      const r = await api("settings", { method: "POST", body: { daysOff } });
+      state.config.settings = r.settings;
+      toast("Days off saved");
+      render();
+    } catch (e) { toast(e.message); }
+  };
 }
 
 function renderStatus() {

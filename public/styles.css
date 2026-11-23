@@ -136,3 +136,29 @@ details.hist li { margin: 2px 0; }
 .ok-box { text-align: center; padding: 30px 10px; }
 .ok-box .tick { width: 64px; height: 64px; border-radius: 50%; background: var(--green-soft); color: var(--green); display: grid; place-items: center;
   font-size: 34px; margin: 0 auto 12px; }
+
+/* Planner */
+.b-time { background: #eef0f2; color: var(--ink-2); }
+.b-day { background: var(--blue-soft); color: var(--blue); }
+.warnline { border-radius: 10px; padding: 10px 12px; margin: 0 0 8px; font-size: 15px; }
+.warnline.red { background: var(--red-soft); color: var(--red); }
+.warnline.amber { background: var(--amber-soft); color: #7a4f0c; }
+.warnline.info { background: #eef0f2; color: var(--ink-2); }
+.warnline.ok { background: var(--green-soft); color: var(--green); }
+.card.move { border-left: 5px solid var(--gold); }
+.weekwrap { overflow-x: auto; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); }
+table.week { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13px; }
+table.week th { padding: 8px 6px; text-align: left; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+table.week tr + tr th { border-top: 1px solid var(--line); }
+table.week td { border-top: 1px solid var(--line); border-left: 1px solid var(--line); padding: 6px; text-align: center; cursor: pointer; }
+table.week td b { display: block; font-size: 15px; }
+table.week td small { color: var(--muted); font-size: 11px; }
+table.week td.full { background: var(--green-soft); }
+table.week td.full b { color: var(--green); }
+table.week td.mid { background: #f6f8f3; }
+table.week td.low { background: var(--amber-soft); }
+table.week td.low b { color: var(--amber); }
+table.week td.off, table.week td.gone { background: #f1efeb; color: var(--muted); cursor: default; }
+.dayoff { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
+.dayoff + .dayoff { border-top: 1px solid var(--line); }
+.dayoff select { padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: #fff; min-width: 150px; }

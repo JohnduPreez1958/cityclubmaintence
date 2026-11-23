@@ -12,6 +12,18 @@ Report maintenance problems, send them to the right handyman, and track which ro
 
 Jobs where the room **can't be sold** are shown in red and always listed first.
 
+## Planning the days
+
+- Each type of job has a rough time (for example a toilet 1 h, painting 4 h). Managers can change the time on any job under **Manage**.
+- The maintenance team work 9:00–17:00, six days a week. Managers set each person's day off in **Planner → Days off**.
+- Each person's jobs are filled into their working days, with out-of-order rooms first. Handymen see them under **Today**, **Tomorrow** and later days.
+- The **Planner** tab (managers only) shows:
+  - a week grid of hours booked per person per day
+  - **suggested moves**: unassigned jobs, or jobs that would wait for one person while someone else who can do that kind of job has free time today or tomorrow. Tap **Move** or **Not now**.
+  - **warnings**: someone not fully allocated today, or booked two or more days ahead.
+
+Who can be given which kind of job is set in `lib/config.mjs` (`can:`); the working hours are set there too (`WORK`).
+
 ## Who a new job goes to
 
 The manager can change the assignment at any time.

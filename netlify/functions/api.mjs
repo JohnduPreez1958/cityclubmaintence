@@ -17,6 +17,6 @@ function store(name) {
 }
 
 export default async (req) =>
-  handle(req, { jobs: store("maintenance-jobs"), photos: store("maintenance-photos"), env: process.env });
+  handle(req, { jobs: store("maintenance-jobs"), photos: store("maintenance-photos"), settings: store("maintenance-settings"), env: process.env });
 
 export const config = { path: "/api/*" };
