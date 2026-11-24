@@ -7,10 +7,34 @@ Report maintenance problems, send them to the right handyman, and track which ro
 | Login | Can do |
 |---|---|
 | **Staff** (reception, housekeeping) | Report a problem, see the status of all jobs |
-| **Handyman** (Paul, Kabos, Dadou, Pathy) | Report, see *My jobs*, take unassigned jobs, start / mark waiting / mark fixed (with a photo) |
+| **Handyman** (Paul, Kabos, Dadou, Pathy) | Report, see *My jobs*, take unassigned jobs, start / mark waiting / mark fixed (**a photo of the fix is required**) |
 | **Manager** | Everything: dashboard, assign or reassign, mark a room out of order or sellable, reopen jobs |
 
 Jobs where the room **can't be sold** are shown in red and always listed first.
+
+## Planning the days
+
+- Each type of job has a rough time (for example a toilet 1 h, painting 4 h). Managers can change the time on any job under **Manage**.
+- The maintenance team work 9:00–17:00, six days a week. Managers set each person's day off in **Planner → Days off**.
+- Each person's jobs are filled into their working days, with out-of-order rooms first. Handymen see them under **Today**, **Tomorrow** and later days.
+- The **Planner** tab (managers only) shows:
+  - a week grid of hours booked per person per day
+  - **suggested moves**: unassigned jobs, or jobs that would wait for one person while someone else who can do that kind of job has free time today or tomorrow. Tap **Move** or **Not now**.
+  - **warnings**: someone not fully allocated today, or booked two or more days ahead.
+
+## Daily report (managers)
+
+The **Daily report** tab shows all maintenance staff on one page, for any date:
+
+- **Performance against budget** for the day, week to date and month to date. Budget = working hours (none on a day off, and only hours already worked for today). Done = the set time of each job they marked fixed. The over/under column is Done minus Budget, with a total row.
+- **Jobs fixed** that day by each person.
+- **Next 7 days**: each person's planned jobs per day.
+
+- **Job detail per person** (for performance meetings): for the day, week or month to date, each person's budget − done = over/under, a day-by-day breakdown, every job fixed (when, room, problem, when reported, how long it waited, set time, time taken from Start to Fixed, his note, photo) and every job still open.
+
+**Print / save PDF** gives an A4 landscape copy: performance on page 1, the 7-day plan next, then each person's job detail on their own page(s).
+
+Who can be given which kind of job is set in `lib/config.mjs` (`can:`); the working hours are set there too (`WORK`).
 
 ## Who a new job goes to
 

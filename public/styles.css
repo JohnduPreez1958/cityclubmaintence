@@ -136,3 +136,85 @@ details.hist li { margin: 2px 0; }
 .ok-box { text-align: center; padding: 30px 10px; }
 .ok-box .tick { width: 64px; height: 64px; border-radius: 50%; background: var(--green-soft); color: var(--green); display: grid; place-items: center;
   font-size: 34px; margin: 0 auto 12px; }
+
+/* Planner */
+.b-time { background: #eef0f2; color: var(--ink-2); }
+.b-day { background: var(--blue-soft); color: var(--blue); }
+.warnline { border-radius: 10px; padding: 10px 12px; margin: 0 0 8px; font-size: 15px; }
+.warnline.red { background: var(--red-soft); color: var(--red); }
+.warnline.amber { background: var(--amber-soft); color: #7a4f0c; }
+.warnline.info { background: #eef0f2; color: var(--ink-2); }
+.warnline.ok { background: var(--green-soft); color: var(--green); }
+.card.move { border-left: 5px solid var(--gold); }
+.weekwrap { overflow-x: auto; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); }
+table.week { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13px; }
+table.week th { padding: 8px 6px; text-align: left; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+table.week tr + tr th { border-top: 1px solid var(--line); }
+table.week td { border-top: 1px solid var(--line); border-left: 1px solid var(--line); padding: 6px; text-align: center; cursor: pointer; }
+table.week td b { display: block; font-size: 15px; }
+table.week td small { color: var(--muted); font-size: 11px; }
+table.week td.full { background: var(--green-soft); }
+table.week td.full b { color: var(--green); }
+table.week td.mid { background: #f6f8f3; }
+table.week td.low { background: var(--amber-soft); }
+table.week td.low b { color: var(--amber); }
+table.week td.off, table.week td.gone { background: #f1efeb; color: var(--muted); cursor: default; }
+.dayoff { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
+.dayoff + .dayoff { border-top: 1px solid var(--line); }
+.dayoff select { padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: #fff; min-width: 150px; }
+
+/* Daily report */
+main:has(.report) { max-width: 1200px; }
+.rep-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 8px 4px 10px; }
+table.rep { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 13px; }
+table.rep th, table.rep td { padding: 7px 8px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.rep th { font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+table.rep th.grp { text-align: center; border-left: 1px solid var(--line); background: #faf8f4; }
+table.rep .num { text-align: right; white-space: nowrap; }
+table.rep tr.total th, table.rep tr.total td { border-top: 2px solid var(--ink); font-weight: 700; }
+.over { color: var(--green); }
+.under { color: var(--red); }
+table.rep.list td div { padding: 2px 0; }
+table.rep.plan7 td { border-left: 1px solid var(--line); min-width: 92px; }
+.cellh { font-weight: 700; font-size: 12px; margin-bottom: 4px; }
+.cellh.fullh { color: var(--green); }
+.pj { font-size: 12px; padding: 3px 5px; margin-bottom: 3px; border-radius: 6px; background: #f3f1ec; line-height: 1.25; }
+.pj span { color: var(--muted); }
+.pj.blk { background: var(--red-soft); }
+td.offc { color: var(--muted); background: #f1efeb; text-align: center !important; vertical-align: middle !important; }
+.small-note { font-size: 12px; margin: 6px 4px; }
+
+@media print {
+  @page { size: A4 landscape; margin: 10mm; }
+  body { background: #fff; font-size: 11px; }
+  .top, #banner, nav#tabs, .noprint, .toast, .sheet { display: none !important; }
+  main { max-width: none; padding: 0; }
+  .weekwrap { overflow: visible; border: 0; }
+  table.rep { min-width: 0; font-size: 10.5px; }
+  table.rep tr { break-inside: avoid; }
+  h3 { margin-top: 14px; }
+  h3.pagebreak { break-before: page; margin-top: 0; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+/* Report: job detail per person */
+section.detail { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 14px 14px; margin: 14px 0; }
+section.detail h3 { color: var(--ink); font-size: 16px; text-transform: none; letter-spacing: 0; }
+section.detail h4 { margin: 16px 0 6px; font-size: 14px; }
+.explain { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; margin: 6px 0 12px; }
+.explain > div:not(.op) { flex: 1 1 150px; background: #faf8f4; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.explain span { display: block; font-size: 12px; }
+.explain b { display: block; font-size: 22px; }
+.explain small { color: var(--muted); font-size: 12px; }
+.explain .op { align-self: center; font-size: 22px; color: var(--muted); }
+table.rep.jobs { min-width: 720px; }
+table.rep .nw { white-space: nowrap; }
+table.rep.detail-days { min-width: 0; margin-bottom: 4px; }
+section.detail { overflow-x: auto; }
+@media print {
+  section.detail { border: 0; padding: 0; margin: 0; overflow: visible; }
+  table.rep.jobs { min-width: 0; }
+  h3, h4 { break-after: avoid; }
+  .explain, table.rep tr { break-inside: avoid; }
+  .explain b { font-size: 16px; }
+}

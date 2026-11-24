@@ -22,7 +22,7 @@ function fileStore(name) {
     },
   };
 }
-const stores = { jobs: fileStore("jobs"), photos: fileStore("photos"), env: process.env };
+const stores = { jobs: fileStore("jobs"), photos: fileStore("photos"), settings: fileStore("settings"), env: process.env };
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");

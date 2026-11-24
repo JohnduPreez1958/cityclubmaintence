@@ -10,6 +10,12 @@ const state = {
   tab: null,
   filters: { building: "", person: "", status: "active" },
   form: null,
+  plan: null,
+  advice: null,
+  dismissed: new Set(),
+  reportDate: null,
+  detailPeriod: "wtd",
+  allJobs: null,
 };
 
 const STATUS_LABEL = { open: "Not started", in_progress: "Busy", waiting: "Waiting", done: "Fixed" };
@@ -55,6 +61,115 @@ function suggest(building, cat) {
   const local = state.config.team.find((t) => t.buildings.includes(building));
   if (cat === "water" && local && local.id === "paul") return "dadou";
   return local ? local.id : null;
+}
+
+// ---------- day planning
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const HORIZON = 60; // days looked ahead
+const jobMins = (j) => j.minutes || (state.config.categories.find((c) => c.id === j.category) || {}).minutes || 60;
+const fmtH = (m) => (!m ? "0 h" : m >= 60 ? Math.round(m / 6) / 10 + " h" : Math.round(m) + " min");
+const workers = () => state.config.team.filter((t) => !t.external);
+const dayOffOf = (id) => { const v = (state.config.settings.daysOff || {})[id]; return v === undefined ? null : v; };
+function dateAt(d, now = new Date()) { const x = new Date(now); x.setHours(12, 0, 0, 0); x.setDate(x.getDate() + d); return x; }
+function dayLabel(d, short) {
+  if (d === 0) return "Today";
+  if (d === 1) return "Tomorrow";
+  const x = dateAt(d);
+  return short ? DAYS[x.getDay()].slice(0, 3) + " " + x.getDate() : DAYS[x.getDay()] + " " + x.getDate() + " " + x.toLocaleString([], { month: "short" });
+}
+function capacity(id, d, now) {
+  if (dayOffOf(id) === dateAt(d, now).getDay()) return 0;
+  const { start, end } = state.config.work;
+  if (d > 0) return (end - start) * 60;
+  const n = now.getHours() * 60 + now.getMinutes();
+  return Math.max(0, Math.min((end - start) * 60, end * 60 - Math.max(n, start * 60)));
+}
+const planOrder = (a, b) => ((b.status === "in_progress") - (a.status === "in_progress")) || (b.blocking - a.blocking) || (a.createdAt - b.createdAt);
+
+// Fills each person's working days with their jobs, most urgent first.
+function buildPlan(now = new Date()) {
+  const plan = { person: {}, jobDay: {}, now };
+  for (const w of workers()) {
+    const queue = state.jobs.filter((j) => isActive(j) && j.status !== "waiting" && j.assignee === w.id).sort(planOrder);
+    const used = [], jobsByDay = [];
+    let d = 0, rem = capacity(w.id, 0, now);
+    for (const j of queue) {
+      let m = jobMins(j), first = true;
+      while (m > 0 && d < HORIZON) {
+        if (rem <= 0) { d++; rem = capacity(w.id, d, now); continue; }
+        if (first) { plan.jobDay[j.id] = d; first = false; }
+        const t = Math.min(m, rem);
+        rem -= t; m -= t;
+        used[d] = (used[d] || 0) + t;
+        (jobsByDay[d] = jobsByDay[d] || []).push(j);
+      }
+    }
+    const lastDay = queue.length ? Math.max(...queue.map((j) => plan.jobDay[j.id] ?? 0)) : -1;
+    plan.person[w.id] = { used, jobsByDay, lastDay };
+  }
+  return plan;
+}
+
+// Suggested moves and warnings for the manager.
+function advise(plan) {
+  const now = plan.now, moves = [], warnings = [];
+  const free = {};
+  for (const w of workers()) free[w.id] = [0, 1].map((d) => capacity(w.id, d, now) - (plan.person[w.id].used[d] || 0));
+  const canDo = (w, j) => w.can.includes(j.category);
+  const pickBest = (cands, j, d) => cands
+    .filter((w) => free[w.id][d] >= jobMins(j))
+    .sort((a, b) => (b.buildings.includes(j.building) - a.buildings.includes(j.building)) || (free[b.id][d] - free[a.id][d]))[0];
+
+  // 1. jobs nobody has yet
+  const unassigned = state.jobs.filter((j) => isActive(j) && !j.assignee).sort(planOrder);
+  for (const j of unassigned) {
+    const cands = workers().filter((w) => canDo(w, j));
+    let done = false;
+    for (const d of [0, 1]) {
+      const q = pickBest(cands, j, d);
+      if (q) {
+        moves.push({ job: j, to: q.id, why: `Not assigned yet. ${q.name} has ${fmtH(free[q.id][d])} free ${d ? "tomorrow" : "today"}.` });
+        free[q.id][d] -= jobMins(j);
+        done = true;
+        break;
+      }
+    }
+    if (!done && cands.length) {
+      const q = cands.sort((a, b) => plan.person[a.id].lastDay - plan.person[b.id].lastDay)[0];
+      moves.push({ job: j, to: q.id, why: `Not assigned yet. ${q.name} has the shortest list.` });
+    }
+  }
+
+  // 2. someone is booked into later days while someone else has free time sooner
+  for (const p of workers()) {
+    const later = state.jobs
+      .filter((j) => j.assignee === p.id && j.status === "open" && (plan.jobDay[j.id] ?? 0) > 0)
+      .sort(planOrder);
+    for (const j of later) {
+      const jd = plan.jobDay[j.id];
+      for (const d of [0, 1].filter((x) => x < jd)) {
+        const q = pickBest(workers().filter((w) => w.id !== p.id && canDo(w, j)), j, d);
+        if (q) {
+          moves.push({ job: j, from: p.id, to: q.id,
+            why: `${p.name} is booked until ${dayLabel(plan.person[p.id].lastDay).toLowerCase()} — this job would wait until ${dayLabel(jd).toLowerCase()}. ${q.name} has ${fmtH(free[q.id][d])} free ${d ? "tomorrow" : "today"}.` });
+          free[q.id][d] -= jobMins(j);
+          break;
+        }
+      }
+    }
+  }
+
+  // 3. warnings
+  const noDaysOff = workers().filter((w) => dayOffOf(w.id) === null);
+  if (noDaysOff.length) warnings.push({ level: "info", text: `Days off not set for ${noDaysOff.map((w) => w.name).join(", ")} — the plan assumes they work every day. Set them below.` });
+  for (const w of workers()) {
+    const cap = capacity(w.id, 0, now);
+    const booked = plan.person[w.id].used[0] || 0;
+    if (dayOffOf(w.id) === dateAt(0, now).getDay()) { warnings.push({ level: "info", text: `${w.name} is off today.` }); continue; }
+    if (cap >= 120 && booked < cap / 2) warnings.push({ level: "amber", text: `${w.name} is not fully allocated: ${fmtH(booked)} of work booked, ${fmtH(cap - booked)} still free today.` });
+    if (plan.person[w.id].lastDay >= 2) warnings.push({ level: "red", text: `${w.name} is over-allocated: booked until ${dayLabel(plan.person[w.id].lastDay).toLowerCase()}.` });
+  }
+  return { moves: moves.slice(0, 10), warnings };
 }
 
 async function compressPhoto(file) {
@@ -144,8 +259,15 @@ function render() {
     ? `<div class="warn"><b>Test mode:</b> demo PINs are switched on. Set your own staff PINs in Netlify before real use.</div>`
     : "";
 
+  state.plan = buildPlan();
+  if (state.user.role === "manager") {
+    state.advice = advise(state.plan);
+    state.advice.moves = state.advice.moves.filter((m) => !state.dismissed.has(m.job.id + ">" + m.to));
+  }
   const tabs = [];
   if (state.user.role === "manager") tabs.push(["all", "All jobs", state.jobs.filter((j) => isActive(j) && !j.assignee).length]);
+  if (state.user.role === "manager") tabs.push(["planner", "Planner", state.advice.moves.length]);
+  if (state.user.role === "manager") tabs.push(["daily", "Daily report"]);
   if (state.user.role === "handyman") tabs.push(["mine", "My jobs", state.jobs.filter((j) => isActive(j) && j.assignee === state.user.team).length]);
   tabs.push(["report", "Report a problem"]);
   if (state.user.role === "staff") tabs.push(["status", "Job status"]);
@@ -157,6 +279,8 @@ function render() {
   if (state.tab === "report") return renderReport();
   if (state.tab === "mine") return renderMine();
   if (state.tab === "status") return renderStatus();
+  if (state.tab === "planner") return renderPlanner();
+  if (state.tab === "daily") return renderDaily();
   return renderAll();
 }
 
@@ -315,6 +439,8 @@ function jobCard(j) {
       ${j.blocking && j.status !== "done" ? `<span class="badge b-out">Room out of order</span>` : ""}
       <span class="badge b-${j.status}">${STATUS_LABEL[j.status]}</span>
       ${j.assignee ? `<span class="badge b-who">${esc(teamName(j.assignee) || j.assignee)}</span>` : `<span class="badge b-none">Not assigned</span>`}
+      ${j.status !== "done" ? `<span class="badge b-time">~${fmtH(jobMins(j))}</span>` : ""}
+      ${isActive(j) && state.plan && state.plan.jobDay[j.id] !== undefined ? `<span class="badge b-day">Planned: ${dayLabel(state.plan.jobDay[j.id])}</span>` : ""}
     </div>
     ${j.description ? `<div class="desc">${esc(j.description)}</div>` : ""}
     ${j.photo || j.afterPhoto ? `<div class="thumbs">
@@ -371,15 +497,16 @@ async function onAction(job, act) {
     }
     if (act === "done") {
       let after = null;
+      const needPhoto = state.user.role !== "manager";
       return openSheet(`<h2>Mark as fixed</h2><p class="muted">${esc(job.building)} · ${esc(job.room)} — ${esc(catLabel(job.category))}</p>
         <label class="f" for="doneNote">What did you do? (optional)</label>
         <textarea id="doneNote" class="t" placeholder="e.g. replaced the tap washer"></textarea>
-        <label class="f">Photo of the fix (optional)</label>
+        <label class="f">Photo of the fix${needPhoto ? ` <span style="color:var(--red)">(required)</span>` : " (optional)"}</label>
         <div class="photo-pick"><span id="afterPrev"></span>
           <label class="btn light small" for="afterPhoto">Take or add photo</label>
-          <input id="afterPhoto" type="file" accept="image/*" capture="environment" class="hidden"><span id="afterMsg" class="muted"></span></div>
+          <input id="afterPhoto" type="file" accept="image/*" capture="environment" class="hidden"><span id="afterMsg" class="muted">${needPhoto ? "You can't mark it fixed without a photo." : ""}</span></div>
         ${job.blocking ? `<p class="goes-to">Once saved, this room is no longer marked out of order.</p>` : ""}<p></p>
-        <div class="row"><button class="btn light" data-close>Cancel</button><button class="btn green" id="doneSave">Save — it's fixed</button></div>`, () => {
+        <div class="row"><button class="btn light" data-close>Cancel</button><button class="btn green" id="doneSave" ${needPhoto ? "disabled" : ""}>Save — it's fixed</button></div>`, () => {
         $("#afterPhoto").onchange = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
@@ -391,7 +518,7 @@ async function onAction(job, act) {
             $("#afterPrev").innerHTML = `<img src="${r.dataUrl}" alt="">`;
             $("#afterMsg").textContent = "";
           } catch (err) { $("#afterMsg").textContent = err.message; }
-          $("#doneSave").disabled = false;
+          $("#doneSave").disabled = needPhoto && !after;
         };
         $("#doneSave").onclick = async () => {
           try { await doUpdate(job, { action: "done", note: $("#doneNote").value, afterPhoto: after }); toast("Marked as fixed"); } catch (e) { toast(e.message); }
@@ -404,6 +531,10 @@ async function onAction(job, act) {
         <label class="f" for="mAssign">Who should fix it?</label>
         <select id="mAssign" class="t"><option value="">Not assigned</option>
           ${team.map((t) => `<option value="${t.id}" ${job.assignee === t.id ? "selected" : ""}>${esc(t.name)} — ${esc(t.skills)}</option>`).join("")}</select>
+        <label class="f" for="mTime">How long will it take?</label>
+        <select id="mTime" class="t">${[15, 30, 45, 60, 90, 120, 180, 240, 360, 480, 960, 1440]
+          .concat([jobMins(job)]).filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b)
+          .map((m) => `<option value="${m}" ${m === jobMins(job) ? "selected" : ""}>${m >= 480 ? fmtH(m) + " (" + Math.round(m / 48) / 10 + " day" + (m > 480 ? "s" : "") + ")" : fmtH(m)}</option>`).join("")}</select>
         <label class="f">Room status</label>
         <div class="yn">
           <button type="button" class="opt good ${!job.blocking ? "on" : ""}" data-blk="0">Can be sold</button>
@@ -423,9 +554,11 @@ async function onAction(job, act) {
         $("#mSave").onclick = async () => {
           try {
             const a = $("#mAssign").value || null;
+            const t = +$("#mTime").value;
             if (a !== (job.assignee || null)) await doUpdate(job, { action: "assign", assignee: a || "" });
             const fresh = state.jobs.find((j) => j.id === job.id);
             if (blk !== fresh.blocking) await doUpdate(fresh, { action: "blocking", blocking: blk });
+            if (t !== jobMins(job)) await doUpdate(state.jobs.find((j) => j.id === job.id), { action: "estimate", minutes: t });
             render();
           } catch (e) { toast(e.message); }
         };
@@ -443,15 +576,97 @@ function list(jobs, emptyMsg) {
 function renderMine() {
   const me = state.user.team;
   const myBuildings = (state.config.team.find((t) => t.id === me) || { buildings: [] }).buildings;
-  const mine = state.jobs.filter((j) => isActive(j) && j.assignee === me).sort(byPriority);
+  const plan = state.plan;
+  const planned = state.jobs.filter((j) => isActive(j) && j.assignee === me && j.status !== "waiting");
+  const waiting = state.jobs.filter((j) => j.status === "waiting" && j.assignee === me);
   const unassigned = state.jobs.filter((j) => isActive(j) && !j.assignee).sort((a, b) => (myBuildings.includes(b.building) - myBuildings.includes(a.building)) || byPriority(a, b));
   const doneRecent = state.jobs.filter((j) => j.status === "done" && j.assignee === me).sort((a, b) => b.doneAt - a.doneAt).slice(0, 5);
+  const off = dayOffOf(me) === new Date().getDay();
+  const groups = {};
+  for (const j of planned.sort(planOrder)) (groups[plan.jobDay[j.id] ?? 0] = groups[plan.jobDay[j.id] ?? 0] || []).push(j);
+  const used = plan.person[me] ? plan.person[me].used : [];
+  const dayHtml = Object.keys(groups).map(Number).sort((a, b) => a - b)
+    .map((d) => `<h3>${dayLabel(d)} <span style="text-transform:none;letter-spacing:0;font-weight:400">· ${fmtH(used[d] || 0)} of work</span></h3>${list(groups[d], "")}`).join("");
   $("#app").innerHTML = `
     <h2>My jobs</h2>
-    ${list(mine, "No jobs for you right now. 👍")}
+    ${off ? `<div class="goes-to" style="margin-bottom:10px">Today is your day off. These jobs are planned for your next working days.</div>` : ""}
+    ${dayHtml || `<div class="empty">No jobs for you right now. 👍</div>`}
+    ${waiting.length ? `<h3>Waiting for something</h3>${list(waiting, "")}` : ""}
     ${unassigned.length ? `<h3>Not assigned yet</h3>${list(unassigned, "")}` : ""}
     ${doneRecent.length ? `<h3>Recently fixed</h3>${list(doneRecent, "")}` : ""}`;
   wireCards();
+}
+
+function renderPlanner() {
+  const plan = state.plan;
+  const { moves, warnings } = state.advice;
+  const ws = workers();
+  const NDAYS = 7;
+  const full = (state.config.work.end - state.config.work.start) * 60;
+  const cell = (w, d) => {
+    const cap = d === 0 ? capacity(w.id, 0, plan.now) : capacity(w.id, d, plan.now);
+    if (dayOffOf(w.id) === dateAt(d).getDay()) return `<td class="off">Off</td>`;
+    const u = plan.person[w.id].used[d] || 0;
+    const pct = cap ? u / cap : u ? 1 : 0;
+    const cls = !cap ? "gone" : pct >= 0.99 ? "full" : pct >= 0.5 ? "mid" : d === 0 ? "low" : "free";
+    return `<td class="${cls}" data-w="${w.id}" data-d="${d}"><b>${u ? fmtH(u) : "–"}</b><small>${d === 0 ? "of " + fmtH(cap) + " left" : "of " + fmtH(full)}</small></td>`;
+  };
+  $("#app").innerHTML = `
+    <h2>Planner</h2>
+    ${warnings.length ? warnings.map((w) => `<div class="warnline ${w.level}">${esc(w.text)}</div>`).join("") : `<div class="warnline ok">Everyone has a full day and nobody is over-booked.</div>`}
+
+    <h3>Suggested moves</h3>
+    ${moves.length ? moves.map((m, i) => `<div class="card move">
+        <div class="where">${esc(m.job.building)} · ${esc(m.job.room)} <span class="muted" style="font-weight:400">— ${esc(catLabel(m.job.category))}, ~${fmtH(jobMins(m.job))}</span></div>
+        <div style="margin:4px 0 8px">${m.from ? `Move from <b>${esc(teamName(m.from))}</b> to <b>${esc(teamName(m.to))}</b>` : `Give to <b>${esc(teamName(m.to))}</b>`}${m.job.blocking ? ` <span class="badge b-out">Room out of order</span>` : ""}</div>
+        <div class="muted" style="font-size:14px">${esc(m.why)}</div>
+        <div class="row" style="margin-top:10px"><button class="btn gold small" data-move="${i}">${m.from ? "Move" : "Assign"} to ${esc(teamName(m.to))}</button><button class="btn light small" data-skip="${i}">Not now</button></div>
+      </div>`).join("") : `<div class="empty" style="padding:14px">No moves to suggest.</div>`}
+
+    <h3>This week</h3>
+    <div class="weekwrap"><table class="week">
+      <tr><th></th>${Array.from({ length: NDAYS }, (_, d) => `<th>${dayLabel(d, true)}</th>`).join("")}</tr>
+      ${ws.map((w) => `<tr><th>${esc(w.name)}</th>${Array.from({ length: NDAYS }, (_, d) => cell(w, d)).join("")}</tr>`).join("")}
+    </table></div>
+    <p class="muted" style="font-size:13px;margin:6px 4px">Hours of work booked each day (${state.config.work.start}:00–${state.config.work.end}:00). Tap a day to see the jobs. Jobs marked "Waiting" are not counted.</p>
+
+    <h3>Days off</h3>
+    <div class="card">
+      ${ws.map((w) => `<div class="dayoff"><span>${esc(w.name)}</span><select data-off="${w.id}">
+        <option value="">Not set</option>${DAYS.map((n, i) => `<option value="${i}" ${dayOffOf(w.id) === i ? "selected" : ""}>${n}</option>`).join("")}</select></div>`).join("")}
+      <button class="btn gold block" id="saveOff" style="margin-top:12px">Save days off</button>
+    </div>`;
+
+  document.querySelectorAll("[data-move]").forEach((b) => (b.onclick = async () => {
+    const m = moves[+b.dataset.move];
+    try { await doUpdate(m.job, { action: "assign", assignee: m.to }); toast(`${m.job.building} ${m.job.room} given to ${teamName(m.to)}`); } catch (e) { toast(e.message); }
+  }));
+  document.querySelectorAll("[data-skip]").forEach((b) => (b.onclick = () => {
+    const m = moves[+b.dataset.skip];
+    state.dismissed.add(m.job.id + ">" + m.to);
+    render();
+  }));
+  document.querySelectorAll("td[data-w]").forEach((td) => (td.onclick = () => {
+    const w = td.dataset.w, d = +td.dataset.d;
+    const js = (plan.person[w].jobsByDay[d] || []);
+    openSheet(`<h2>${esc(teamName(w))} — ${dayLabel(d)}</h2>${js.length ? js.map(jobCard).join("") : `<div class="empty">Nothing booked.</div>`}
+      <button class="btn light block" data-close>Close</button>`, (s) => {
+      s.querySelectorAll(".job").forEach((card) => {
+        const job = state.jobs.find((j) => j.id === card.dataset.id);
+        card.querySelectorAll("[data-act]").forEach((b) => (b.onclick = () => onAction(job, b.dataset.act)));
+      });
+    });
+  }));
+  $("#saveOff").onclick = async () => {
+    const daysOff = {};
+    document.querySelectorAll("[data-off]").forEach((s) => (daysOff[s.dataset.off] = s.value === "" ? null : +s.value));
+    try {
+      const r = await api("settings", { method: "POST", body: { daysOff } });
+      state.config.settings = r.settings;
+      toast("Days off saved");
+      render();
+    } catch (e) { toast(e.message); }
+  };
 }
 
 function renderStatus() {
@@ -501,10 +716,222 @@ function renderAll() {
   wireCards();
 }
 
+// ---------- daily report
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const sameDay = (ts, d) => { const x = new Date(ts); return x.getFullYear() === d.getFullYear() && x.getMonth() === d.getMonth() && x.getDate() === d.getDate(); };
+const signedH = (m) => (m > 0 ? "+" : m < 0 ? "−" : "") + fmtH(Math.abs(m)).replace("0 min", "0 h");
+const varCls = (m) => (m > 0 ? "over" : m < 0 ? "under" : "");
+// Budget counts from the first day the app was used, and only the hours already worked today.
+function trackingStart() {
+  const all = state.allJobs || state.jobs;
+  if (!all.length) return null;
+  const d = new Date(Math.min(...all.map((j) => j.createdAt))); d.setHours(0, 0, 0, 0);
+  return d;
+}
+function budgetFor(id, d) {
+  const { start, end } = state.config.work;
+  const ts = trackingStart();
+  if (dayOffOf(id) === d.getDay() || !ts || d < ts) return 0;
+  const now = new Date();
+  if (sameDay(now.getTime(), d)) {
+    const n = now.getHours() * 60 + now.getMinutes();
+    return Math.max(0, Math.min(end * 60, n) - start * 60);
+  }
+  return d > now ? 0 : (end - start) * 60;
+}
+function fixedOn(id, d) { return (state.allJobs || state.jobs).filter((j) => j.status === "done" && j.assignee === id && j.doneAt && sameDay(j.doneAt, d)); }
+function perfRange(id, from, to) {
+  let budget = 0, done = 0, jobs = 0;
+  for (const d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+    budget += budgetFor(id, d);
+    const f = fixedOn(id, d);
+    jobs += f.length;
+    done += f.reduce((s, j) => s + jobMins(j), 0);
+  }
+  return { budget, done, jobs, diff: done - budget };
+}
+
+// When he tapped Start on this job (last time before it was fixed), if he did.
+function startedAt(j) {
+  if (j.startedAt && j.startedAt <= (j.doneAt || Infinity)) return j.startedAt;
+  const h = (j.history || []).filter((x) => x.text === "Started work" && x.at <= (j.doneAt || Infinity)).pop();
+  return h ? h.at : null;
+}
+function takenText(j) {
+  const s = startedAt(j);
+  if (!s || !j.doneAt || !sameDay(s, new Date(j.doneAt))) return `<span class="muted">not timed</span>`;
+  return fmtH(Math.max(1, Math.round((j.doneAt - s) / 60000)));
+}
+const shortDate = (ts) => new Date(ts).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+const shortTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function ageText(from, to) {
+  const m = Math.round((to - from) / 60000);
+  if (m < 60) return m + " min";
+  if (m < 48 * 60) return Math.round(m / 60) + " h";
+  return Math.round(m / 1440) + " days";
+}
+
+function detailSection(w, from, to, periodLabel) {
+  const days = [];
+  for (const d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+  const dayRows = days.map((d) => {
+    const f = fixedOn(w.id, d);
+    const b = budgetFor(w.id, d), dn = f.reduce((s, j) => s + jobMins(j), 0);
+    return { d, b, dn, n: f.length, off: dayOffOf(w.id) === d.getDay() };
+  });
+  const B = dayRows.reduce((s, r) => s + r.b, 0), DN = dayRows.reduce((s, r) => s + r.dn, 0);
+  const workDays = dayRows.filter((r) => r.b > 0).length;
+  const offDays = dayRows.filter((r) => r.off);
+  const fixed = days.flatMap((d) => fixedOn(w.id, d)).sort((a, b) => a.doneAt - b.doneAt);
+  const open = state.jobs.filter((j) => isActive(j) && j.assignee === w.id).sort(planOrder);
+  const now = Date.now();
+  const diff = DN - B;
+  return `<section class="detail">
+    <h3 class="pagebreak">${esc(w.name)} — job detail, ${esc(periodLabel)}</h3>
+    <div class="explain">
+      <div><span class="muted">Budget</span><b>${fmtH(B)}</b><small>${workDays} working day${workDays === 1 ? "" : "s"} × up to ${fmtH((state.config.work.end - state.config.work.start) * 60)}${offDays.length ? `, ${offDays.length} day off` : ""}</small></div>
+      <div class="op">−</div>
+      <div><span class="muted">Done</span><b>${fmtH(DN)}</b><small>${fixed.length} job${fixed.length === 1 ? "" : "s"} fixed, at their set times</small></div>
+      <div class="op">=</div>
+      <div><span class="muted">Over / under</span><b class="${varCls(diff)}">${signedH(diff)}</b><small>${diff < 0 ? `${fmtH(-diff)} of paid time not covered by fixed jobs` : diff > 0 ? `${fmtH(diff)} more work than his hours` : "exactly on budget"}</small></div>
+    </div>
+
+    <table class="rep detail-days">
+      <tr><th>Day</th>${dayRows.map((r) => `<th class="num">${r.d.toLocaleDateString([], { weekday: "short", day: "numeric" })}</th>`).join("")}<th class="num">Total</th></tr>
+      <tr><th>Budget</th>${dayRows.map((r) => `<td class="num">${r.off ? `<span class="muted">off</span>` : fmtH(r.b)}</td>`).join("")}<td class="num"><b>${fmtH(B)}</b></td></tr>
+      <tr><th>Done</th>${dayRows.map((r) => `<td class="num">${fmtH(r.dn)}${r.n ? ` <span class="muted">(${r.n})</span>` : ""}</td>`).join("")}<td class="num"><b>${fmtH(DN)}</b></td></tr>
+      <tr><th>Over / under</th>${dayRows.map((r) => `<td class="num ${varCls(r.dn - r.b)}">${signedH(r.dn - r.b)}</td>`).join("")}<td class="num ${varCls(diff)}"><b>${signedH(diff)}</b></td></tr>
+    </table>
+
+    <h4>Jobs fixed (${fixed.length})</h4>
+    ${fixed.length ? `<table class="rep jobs">
+      <thead><tr><th>Fixed</th><th>Room</th><th>Problem</th><th>Reported</th><th class="num">Waited</th><th class="num">Set time</th><th class="num">Time taken</th><th>His note</th><th>Photo</th></tr></thead>
+      ${fixed.map((j) => `<tr>
+        <td class="nw">${shortDate(j.doneAt)} ${shortTime(j.doneAt)}</td>
+        <td class="nw"><b>${esc(j.building)} ${esc(j.room)}</b>${j.blocking ? `<div class="muted">was out of order</div>` : ""}</td>
+        <td>${esc(catLabel(j.category))}${j.description ? `<div class="muted">${esc(j.description)}</div>` : ""}</td>
+        <td class="nw">${shortDate(j.createdAt)} ${shortTime(j.createdAt)}<div class="muted">by ${esc(j.createdBy)}</div></td>
+        <td class="num">${ageText(j.createdAt, j.doneAt)}</td>
+        <td class="num"><b>${fmtH(jobMins(j))}</b></td>
+        <td class="num">${takenText(j)}</td>
+        <td>${j.doneNote ? esc(j.doneNote) : `<span class="muted">–</span>`}</td>
+        <td>${j.afterPhoto ? "✓" : `<span class="under">none</span>`}</td></tr>`).join("")}
+      <tr class="total"><td colspan="5">Total counted as done</td><td class="num">${fmtH(DN)}</td><td colspan="3"></td></tr>
+    </table>` : `<p class="muted">No jobs fixed in this period.</p>`}
+
+    <h4>Still open (${open.length})</h4>
+    ${open.length ? `<table class="rep jobs">
+      <thead><tr><th>Room</th><th>Problem</th><th>Reported</th><th class="num">Open for</th><th>Status</th><th class="num">Set time</th><th>Planned</th></tr></thead>
+      ${open.map((j) => `<tr>
+        <td class="nw"><b>${esc(j.building)} ${esc(j.room)}</b>${j.blocking ? ` <span class="badge b-out">out of order</span>` : ""}</td>
+        <td>${esc(catLabel(j.category))}${j.description ? `<div class="muted">${esc(j.description)}</div>` : ""}</td>
+        <td class="nw">${shortDate(j.createdAt)}</td>
+        <td class="num ${now - j.createdAt > 2 * 864e5 ? "under" : ""}">${ageText(j.createdAt, now)}</td>
+        <td>${STATUS_LABEL[j.status]}${j.status === "waiting" ? `<div class="muted">${esc((j.history.filter((h) => h.text.startsWith("Waiting:")).pop() || { text: "" }).text.replace("Waiting: ", ""))}</div>` : ""}</td>
+        <td class="num">${fmtH(jobMins(j))}</td>
+        <td class="nw">${state.plan.jobDay[j.id] !== undefined ? dayLabel(state.plan.jobDay[j.id]) : `<span class="muted">–</span>`}</td></tr>`).join("")}
+    </table>` : `<p class="muted">Nothing open.</p>`}
+  </section>`;
+}
+
+async function renderDaily() {
+  if (!state.reportDate) state.reportDate = ymd(new Date());
+  if (!state.allJobs) {
+    $("#app").innerHTML = `<p class="muted center pad">Loading report…</p>`;
+    try { state.allJobs = (await api("jobs?all=1")).jobs; } catch (e) { $("#app").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    if (state.tab !== "daily") return;
+  }
+  const [y, mo, da] = state.reportDate.split("-").map(Number);
+  const D = new Date(y, mo - 1, da, 12);
+  const today = new Date(); today.setHours(12, 0, 0, 0);
+  const isToday = ymd(D) === ymd(today);
+  const weekStart = new Date(D); weekStart.setDate(D.getDate() - ((D.getDay() + 6) % 7)); // Monday
+  const monthStart = new Date(D.getFullYear(), D.getMonth(), 1, 12);
+  const ws = workers();
+  const rows = ws.map((w) => ({ w, day: perfRange(w.id, D, D), wtd: perfRange(w.id, weekStart, D), mtd: perfRange(w.id, monthStart, D),
+    open: state.jobs.filter((j) => isActive(j) && j.assignee === w.id) }));
+  const tot = (k) => rows.reduce((a, r) => ({ budget: a.budget + r[k].budget, done: a.done + r[k].done, jobs: a.jobs + r[k].jobs, diff: a.diff + r[k].diff }), { budget: 0, done: 0, jobs: 0, diff: 0 });
+  const T = { day: tot("day"), wtd: tot("wtd"), mtd: tot("mtd") };
+  const vcell = (p) => `<td class="num ${varCls(p.diff)}"><b>${signedH(p.diff)}</b></td>`;
+  const longDate = D.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const plan = state.plan;
+  const NDAYS = 7;
+  const unsetOff = ws.filter((w) => dayOffOf(w.id) === null);
+
+  $("#app").innerHTML = `
+  <div class="report">
+    <div class="rep-head">
+      <div><h2 style="margin:0">Daily maintenance report</h2><div class="muted">${esc(longDate)}${isToday ? " · so far today" : ""}</div></div>
+      <div class="row noprint"><input type="date" id="repDate" value="${state.reportDate}" max="${ymd(today)}" class="t" style="width:auto">
+        <button class="btn light small" id="repPrint">Print / save PDF</button></div>
+    </div>
+    ${unsetOff.length ? `<div class="warnline info noprint">Days off are not set for ${unsetOff.map((w) => w.name).join(", ")}, so every day counts as a working day in their budget. Set them in Planner.</div>` : ""}
+
+    <h3>Performance against budget</h3>
+    <div class="weekwrap"><table class="rep">
+      <tr><th rowspan="2">Maintenance</th><th colspan="4" class="grp">${isToday ? "Today" : "This day"}</th><th colspan="3" class="grp">Week to date</th><th colspan="3" class="grp">Month to date</th><th rowspan="2" class="num">Still open</th></tr>
+      <tr><th class="num">Budget</th><th class="num">Done</th><th class="num">Jobs</th><th class="num">Over / under</th>
+        <th class="num">Budget</th><th class="num">Done</th><th class="num">Over / under</th>
+        <th class="num">Budget</th><th class="num">Done</th><th class="num">Over / under</th></tr>
+      ${rows.map((r) => `<tr><th>${esc(r.w.name)}${dayOffOf(r.w.id) === D.getDay() ? ` <span class="muted" style="font-weight:400">(off)</span>` : ""}</th>
+        <td class="num">${fmtH(r.day.budget)}</td><td class="num">${fmtH(r.day.done)}</td><td class="num">${r.day.jobs}</td>${vcell(r.day)}
+        <td class="num">${fmtH(r.wtd.budget)}</td><td class="num">${fmtH(r.wtd.done)}</td>${vcell(r.wtd)}
+        <td class="num">${fmtH(r.mtd.budget)}</td><td class="num">${fmtH(r.mtd.done)}</td>${vcell(r.mtd)}
+        <td class="num">${r.open.length} · ${fmtH(r.open.reduce((s, j) => s + jobMins(j), 0))}</td></tr>`).join("")}
+      <tr class="total"><th>Total</th>
+        <td class="num">${fmtH(T.day.budget)}</td><td class="num">${fmtH(T.day.done)}</td><td class="num">${T.day.jobs}</td>${vcell(T.day)}
+        <td class="num">${fmtH(T.wtd.budget)}</td><td class="num">${fmtH(T.wtd.done)}</td>${vcell(T.wtd)}
+        <td class="num">${fmtH(T.mtd.budget)}</td><td class="num">${fmtH(T.mtd.done)}</td>${vcell(T.mtd)}
+        <td class="num">${rows.reduce((s, r) => s + r.open.length, 0)}</td></tr>
+    </table></div>
+    <p class="muted small-note">Budget = working hours (${state.config.work.start}:00–${state.config.work.end}:00, nothing on a day off${isToday ? "; today only counts the hours worked so far" : ""}${trackingStart() ? `; counted from ${trackingStart().toLocaleDateString([], { day: "numeric", month: "short" })}, when the app was first used` : ""}). Done = the set time of each job they marked fixed. <span class="over">+ over</span> means more work done than budgeted, <span class="under">− under</span> means less.</p>
+
+    <h3>Jobs fixed — ${esc(D.toLocaleDateString([], { day: "numeric", month: "short" }))}</h3>
+    <div class="weekwrap"><table class="rep list">
+      ${ws.map((w) => {
+        const f = fixedOn(w.id, D).sort((a, b) => a.doneAt - b.doneAt);
+        return `<tr><th>${esc(w.name)}</th><td>${f.length ? f.map((j) => `<div>${new Date(j.doneAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · <b>${esc(j.building)} ${esc(j.room)}</b> — ${esc(catLabel(j.category))} (${fmtH(jobMins(j))})${j.afterPhoto ? ' <span class="muted">📷</span>' : ""}${j.doneNote ? ` <span class="muted">“${esc(j.doneNote)}”</span>` : ""}</div>`).join("") : `<span class="muted">Nothing fixed</span>`}</td></tr>`;
+      }).join("")}
+    </table></div>
+
+    <h3 class="pagebreak">Next 7 days — planned work</h3>
+    <div class="weekwrap"><table class="rep plan7">
+      <thead><tr><th></th>${Array.from({ length: NDAYS }, (_, d) => `<th>${dayLabel(d, true)}</th>`).join("")}</tr></thead>
+      ${ws.map((w) => `<tr><th>${esc(w.name)}</th>${Array.from({ length: NDAYS }, (_, d) => {
+        if (dayOffOf(w.id) === dateAt(d).getDay()) return `<td class="offc">Off</td>`;
+        const js = plan.person[w.id].jobsByDay[d] || [];
+        const used = plan.person[w.id].used[d] || 0;
+        const cap = capacity(w.id, d, plan.now);
+        return `<td><div class="cellh ${used >= cap && cap ? "fullh" : ""}">${used ? fmtH(used) : "0 h"} / ${fmtH(d === 0 ? cap : (state.config.work.end - state.config.work.start) * 60)}</div>
+          ${js.map((j) => `<div class="pj ${j.blocking ? "blk" : ""}">${esc(j.building)} ${esc(j.room)}<br><span>${esc(catLabel(j.category).split(" (")[0])} · ${fmtH(jobMins(j))}</span></div>`).join("")}</td>`;
+      }).join("")}</tr>`).join("")}
+    </table></div>
+    <p class="muted small-note">Planned from now, most urgent first. Red = room out of order. Jobs that are waiting or not assigned are not shown${state.jobs.filter((j) => isActive(j) && !j.assignee).length ? ` — <b>${state.jobs.filter((j) => isActive(j) && !j.assignee).length} job(s) not assigned yet</b>` : ""}.</p>
+
+    <div class="rep-head noprint" style="margin-top:28px">
+      <h3 style="margin:0">Job detail per person</h3>
+      <select id="detailPeriod" class="t" style="width:auto">
+        ${[["day", "This day"], ["wtd", "Week to date"], ["mtd", "Month to date"]].map(([v, l]) => `<option value="${v}" ${state.detailPeriod === v ? "selected" : ""}>${l}</option>`).join("")}
+      </select>
+    </div>
+    <p class="muted small-note noprint">Each person's over/under figure broken down job by job, for performance meetings. When printed, each person starts on a new page.</p>
+    ${(() => {
+      const from = state.detailPeriod === "day" ? D : state.detailPeriod === "mtd" ? monthStart : weekStart;
+      const label = state.detailPeriod === "day" ? D.toLocaleDateString([], { day: "numeric", month: "short" })
+        : `${from.toLocaleDateString([], { day: "numeric", month: "short" })} – ${D.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}`;
+      return ws.map((w) => detailSection(w, from, D, label)).join("");
+    })()}
+    <p class="muted small-note">Set time = the standard time for that kind of job, used for the budget. Time taken = from when he tapped Start to when he marked it fixed (only if he tapped Start, the same day). Waited = from when it was reported to when it was fixed.</p>
+  </div>`;
+  $("#repDate").onchange = (e) => { if (e.target.value) { state.reportDate = e.target.value; renderDaily(); } };
+  $("#repPrint").onclick = () => window.print();
+  $("#detailPeriod").onchange = (e) => { state.detailPeriod = e.target.value; renderDaily(); };
+}
+
 // refresh every minute while the app is open (not while typing a report or using a pop-up)
 setInterval(async () => {
   if (!state.user || document.hidden || state.tab === "report" || !$("#sheet").classList.contains("hidden")) return;
-  try { await loadJobs(); render(); } catch {}
+  try { await loadJobs(); state.allJobs = null; render(); } catch {}
 }, 60000);
 
 start();
