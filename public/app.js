@@ -492,15 +492,16 @@ async function onAction(job, act) {
     }
     if (act === "done") {
       let after = null;
+      const needPhoto = state.user.role !== "manager";
       return openSheet(`<h2>Mark as fixed</h2><p class="muted">${esc(job.building)} · ${esc(job.room)} — ${esc(catLabel(job.category))}</p>
         <label class="f" for="doneNote">What did you do? (optional)</label>
         <textarea id="doneNote" class="t" placeholder="e.g. replaced the tap washer"></textarea>
-        <label class="f">Photo of the fix (optional)</label>
+        <label class="f">Photo of the fix${needPhoto ? ` <span style="color:var(--red)">(required)</span>` : " (optional)"}</label>
         <div class="photo-pick"><span id="afterPrev"></span>
           <label class="btn light small" for="afterPhoto">Take or add photo</label>
-          <input id="afterPhoto" type="file" accept="image/*" capture="environment" class="hidden"><span id="afterMsg" class="muted"></span></div>
+          <input id="afterPhoto" type="file" accept="image/*" capture="environment" class="hidden"><span id="afterMsg" class="muted">${needPhoto ? "You can't mark it fixed without a photo." : ""}</span></div>
         ${job.blocking ? `<p class="goes-to">Once saved, this room is no longer marked out of order.</p>` : ""}<p></p>
-        <div class="row"><button class="btn light" data-close>Cancel</button><button class="btn green" id="doneSave">Save — it's fixed</button></div>`, () => {
+        <div class="row"><button class="btn light" data-close>Cancel</button><button class="btn green" id="doneSave" ${needPhoto ? "disabled" : ""}>Save — it's fixed</button></div>`, () => {
         $("#afterPhoto").onchange = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
@@ -512,7 +513,7 @@ async function onAction(job, act) {
             $("#afterPrev").innerHTML = `<img src="${r.dataUrl}" alt="">`;
             $("#afterMsg").textContent = "";
           } catch (err) { $("#afterMsg").textContent = err.message; }
-          $("#doneSave").disabled = false;
+          $("#doneSave").disabled = needPhoto && !after;
         };
         $("#doneSave").onclick = async () => {
           try { await doUpdate(job, { action: "done", note: $("#doneNote").value, afterPhoto: after }); toast("Marked as fixed"); } catch (e) { toast(e.message); }

@@ -7,7 +7,7 @@ Report maintenance problems, send them to the right handyman, and track which ro
 | Login | Can do |
 |---|---|
 | **Staff** (reception, housekeeping) | Report a problem, see the status of all jobs |
-| **Handyman** (Paul, Kabos, Dadou, Pathy) | Report, see *My jobs*, take unassigned jobs, start / mark waiting / mark fixed (with a photo) |
+| **Handyman** (Paul, Kabos, Dadou, Pathy) | Report, see *My jobs*, take unassigned jobs, start / mark waiting / mark fixed (**a photo of the fix is required**) |
 | **Manager** | Everything: dashboard, assign or reassign, mark a room out of order or sellable, reopen jobs |
 
 Jobs where the room **can't be sold** are shown in red and always listed first.
