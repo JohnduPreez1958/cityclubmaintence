@@ -12,6 +12,13 @@ Report maintenance problems, send them to the right handyman, and track which ro
 
 Jobs where the room **can't be sold** are shown in red and always listed first.
 
+## Putting the app on a phone
+
+The app can sit on the phone's home screen with its own "CC" icon and opens full-screen like a normal app.
+
+- **iPhone (Safari):** open the app's address, tap the **Share** button (square with an arrow), then **Add to Home Screen → Add**.
+- **Android (Chrome):** open the app's address, tap **⋮** (top right), then **Add to Home screen** or **Install app**.
+
 ## Getting around
 
 A menu bar along the bottom, like a phone app, with a big gold **+** in the middle to report a problem from anywhere.
