@@ -112,6 +112,8 @@ In Netlify go to **Site configuration → Environment variables → Add a variab
 
 Then go to **Deploys → Trigger deploy**. The yellow test-mode banner disappears.
 
+Use 4-digit PINs (or longer). After 5 wrong PINs in a row, that phone is locked out of logging in for 15 minutes, so PINs can't be guessed.
+
 ### The Maintenance tab on cityclubhotels.co.za
 
 To add the tab, point it at this app's address. To use `maintenance.cityclubhotels.co.za` instead, add it under **Domain management** in Netlify.
