@@ -14,6 +14,7 @@ const state = {
   advice: null,
   dismissed: new Set(),
   reportDate: null,
+  detailPeriod: "wtd",
   allJobs: null,
 };
 
@@ -750,6 +751,89 @@ function perfRange(id, from, to) {
   return { budget, done, jobs, diff: done - budget };
 }
 
+// When he tapped Start on this job (last time before it was fixed), if he did.
+function startedAt(j) {
+  if (j.startedAt && j.startedAt <= (j.doneAt || Infinity)) return j.startedAt;
+  const h = (j.history || []).filter((x) => x.text === "Started work" && x.at <= (j.doneAt || Infinity)).pop();
+  return h ? h.at : null;
+}
+function takenText(j) {
+  const s = startedAt(j);
+  if (!s || !j.doneAt || !sameDay(s, new Date(j.doneAt))) return `<span class="muted">not timed</span>`;
+  return fmtH(Math.max(1, Math.round((j.doneAt - s) / 60000)));
+}
+const shortDate = (ts) => new Date(ts).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+const shortTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function ageText(from, to) {
+  const m = Math.round((to - from) / 60000);
+  if (m < 60) return m + " min";
+  if (m < 48 * 60) return Math.round(m / 60) + " h";
+  return Math.round(m / 1440) + " days";
+}
+
+function detailSection(w, from, to, periodLabel) {
+  const days = [];
+  for (const d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+  const dayRows = days.map((d) => {
+    const f = fixedOn(w.id, d);
+    const b = budgetFor(w.id, d), dn = f.reduce((s, j) => s + jobMins(j), 0);
+    return { d, b, dn, n: f.length, off: dayOffOf(w.id) === d.getDay() };
+  });
+  const B = dayRows.reduce((s, r) => s + r.b, 0), DN = dayRows.reduce((s, r) => s + r.dn, 0);
+  const workDays = dayRows.filter((r) => r.b > 0).length;
+  const offDays = dayRows.filter((r) => r.off);
+  const fixed = days.flatMap((d) => fixedOn(w.id, d)).sort((a, b) => a.doneAt - b.doneAt);
+  const open = state.jobs.filter((j) => isActive(j) && j.assignee === w.id).sort(planOrder);
+  const now = Date.now();
+  const diff = DN - B;
+  return `<section class="detail">
+    <h3 class="pagebreak">${esc(w.name)} — job detail, ${esc(periodLabel)}</h3>
+    <div class="explain">
+      <div><span class="muted">Budget</span><b>${fmtH(B)}</b><small>${workDays} working day${workDays === 1 ? "" : "s"} × up to ${fmtH((state.config.work.end - state.config.work.start) * 60)}${offDays.length ? `, ${offDays.length} day off` : ""}</small></div>
+      <div class="op">−</div>
+      <div><span class="muted">Done</span><b>${fmtH(DN)}</b><small>${fixed.length} job${fixed.length === 1 ? "" : "s"} fixed, at their set times</small></div>
+      <div class="op">=</div>
+      <div><span class="muted">Over / under</span><b class="${varCls(diff)}">${signedH(diff)}</b><small>${diff < 0 ? `${fmtH(-diff)} of paid time not covered by fixed jobs` : diff > 0 ? `${fmtH(diff)} more work than his hours` : "exactly on budget"}</small></div>
+    </div>
+
+    <table class="rep detail-days">
+      <tr><th>Day</th>${dayRows.map((r) => `<th class="num">${r.d.toLocaleDateString([], { weekday: "short", day: "numeric" })}</th>`).join("")}<th class="num">Total</th></tr>
+      <tr><th>Budget</th>${dayRows.map((r) => `<td class="num">${r.off ? `<span class="muted">off</span>` : fmtH(r.b)}</td>`).join("")}<td class="num"><b>${fmtH(B)}</b></td></tr>
+      <tr><th>Done</th>${dayRows.map((r) => `<td class="num">${fmtH(r.dn)}${r.n ? ` <span class="muted">(${r.n})</span>` : ""}</td>`).join("")}<td class="num"><b>${fmtH(DN)}</b></td></tr>
+      <tr><th>Over / under</th>${dayRows.map((r) => `<td class="num ${varCls(r.dn - r.b)}">${signedH(r.dn - r.b)}</td>`).join("")}<td class="num ${varCls(diff)}"><b>${signedH(diff)}</b></td></tr>
+    </table>
+
+    <h4>Jobs fixed (${fixed.length})</h4>
+    ${fixed.length ? `<table class="rep jobs">
+      <thead><tr><th>Fixed</th><th>Room</th><th>Problem</th><th>Reported</th><th class="num">Waited</th><th class="num">Set time</th><th class="num">Time taken</th><th>His note</th><th>Photo</th></tr></thead>
+      ${fixed.map((j) => `<tr>
+        <td class="nw">${shortDate(j.doneAt)} ${shortTime(j.doneAt)}</td>
+        <td class="nw"><b>${esc(j.building)} ${esc(j.room)}</b>${j.blocking ? `<div class="muted">was out of order</div>` : ""}</td>
+        <td>${esc(catLabel(j.category))}${j.description ? `<div class="muted">${esc(j.description)}</div>` : ""}</td>
+        <td class="nw">${shortDate(j.createdAt)} ${shortTime(j.createdAt)}<div class="muted">by ${esc(j.createdBy)}</div></td>
+        <td class="num">${ageText(j.createdAt, j.doneAt)}</td>
+        <td class="num"><b>${fmtH(jobMins(j))}</b></td>
+        <td class="num">${takenText(j)}</td>
+        <td>${j.doneNote ? esc(j.doneNote) : `<span class="muted">–</span>`}</td>
+        <td>${j.afterPhoto ? "✓" : `<span class="under">none</span>`}</td></tr>`).join("")}
+      <tr class="total"><td colspan="5">Total counted as done</td><td class="num">${fmtH(DN)}</td><td colspan="3"></td></tr>
+    </table>` : `<p class="muted">No jobs fixed in this period.</p>`}
+
+    <h4>Still open (${open.length})</h4>
+    ${open.length ? `<table class="rep jobs">
+      <thead><tr><th>Room</th><th>Problem</th><th>Reported</th><th class="num">Open for</th><th>Status</th><th class="num">Set time</th><th>Planned</th></tr></thead>
+      ${open.map((j) => `<tr>
+        <td class="nw"><b>${esc(j.building)} ${esc(j.room)}</b>${j.blocking ? ` <span class="badge b-out">out of order</span>` : ""}</td>
+        <td>${esc(catLabel(j.category))}${j.description ? `<div class="muted">${esc(j.description)}</div>` : ""}</td>
+        <td class="nw">${shortDate(j.createdAt)}</td>
+        <td class="num ${now - j.createdAt > 2 * 864e5 ? "under" : ""}">${ageText(j.createdAt, now)}</td>
+        <td>${STATUS_LABEL[j.status]}${j.status === "waiting" ? `<div class="muted">${esc((j.history.filter((h) => h.text.startsWith("Waiting:")).pop() || { text: "" }).text.replace("Waiting: ", ""))}</div>` : ""}</td>
+        <td class="num">${fmtH(jobMins(j))}</td>
+        <td class="nw">${state.plan.jobDay[j.id] !== undefined ? dayLabel(state.plan.jobDay[j.id]) : `<span class="muted">–</span>`}</td></tr>`).join("")}
+    </table>` : `<p class="muted">Nothing open.</p>`}
+  </section>`;
+}
+
 async function renderDaily() {
   if (!state.reportDate) state.reportDate = ymd(new Date());
   if (!state.allJobs) {
@@ -823,9 +907,25 @@ async function renderDaily() {
       }).join("")}</tr>`).join("")}
     </table></div>
     <p class="muted small-note">Planned from now, most urgent first. Red = room out of order. Jobs that are waiting or not assigned are not shown${state.jobs.filter((j) => isActive(j) && !j.assignee).length ? ` — <b>${state.jobs.filter((j) => isActive(j) && !j.assignee).length} job(s) not assigned yet</b>` : ""}.</p>
+
+    <div class="rep-head noprint" style="margin-top:28px">
+      <h3 style="margin:0">Job detail per person</h3>
+      <select id="detailPeriod" class="t" style="width:auto">
+        ${[["day", "This day"], ["wtd", "Week to date"], ["mtd", "Month to date"]].map(([v, l]) => `<option value="${v}" ${state.detailPeriod === v ? "selected" : ""}>${l}</option>`).join("")}
+      </select>
+    </div>
+    <p class="muted small-note noprint">Each person's over/under figure broken down job by job, for performance meetings. When printed, each person starts on a new page.</p>
+    ${(() => {
+      const from = state.detailPeriod === "day" ? D : state.detailPeriod === "mtd" ? monthStart : weekStart;
+      const label = state.detailPeriod === "day" ? D.toLocaleDateString([], { day: "numeric", month: "short" })
+        : `${from.toLocaleDateString([], { day: "numeric", month: "short" })} – ${D.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}`;
+      return ws.map((w) => detailSection(w, from, D, label)).join("");
+    })()}
+    <p class="muted small-note">Set time = the standard time for that kind of job, used for the budget. Time taken = from when he tapped Start to when he marked it fixed (only if he tapped Start, the same day). Waited = from when it was reported to when it was fixed.</p>
   </div>`;
   $("#repDate").onchange = (e) => { if (e.target.value) { state.reportDate = e.target.value; renderDaily(); } };
   $("#repPrint").onclick = () => window.print();
+  $("#detailPeriod").onchange = (e) => { state.detailPeriod = e.target.value; renderDaily(); };
 }
 
 // refresh every minute while the app is open (not while typing a report or using a pop-up)

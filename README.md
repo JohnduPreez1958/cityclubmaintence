@@ -30,7 +30,9 @@ The **Daily report** tab shows all maintenance staff on one page, for any date:
 - **Jobs fixed** that day by each person.
 - **Next 7 days**: each person's planned jobs per day.
 
-**Print / save PDF** gives an A4 landscape copy: performance on page 1, the 7-day plan from page 2.
+- **Job detail per person** (for performance meetings): for the day, week or month to date, each person's budget − done = over/under, a day-by-day breakdown, every job fixed (when, room, problem, when reported, how long it waited, set time, time taken from Start to Fixed, his note, photo) and every job still open.
+
+**Print / save PDF** gives an A4 landscape copy: performance on page 1, the 7-day plan next, then each person's job detail on their own page(s).
 
 Who can be given which kind of job is set in `lib/config.mjs` (`can:`); the working hours are set there too (`WORK`).
 
