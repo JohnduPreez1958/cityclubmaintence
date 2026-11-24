@@ -140,6 +140,7 @@ details.hist li { margin: 2px 0; }
 /* Planner */
 .b-time { background: #eef0f2; color: var(--ink-2); }
 .b-day { background: var(--blue-soft); color: var(--blue); }
+.b-plan { background: #efe9f7; color: #5b3f8c; }
 .warnline { border-radius: 10px; padding: 10px 12px; margin: 0 0 8px; font-size: 15px; }
 .warnline.red { background: var(--red-soft); color: var(--red); }
 .warnline.amber { background: var(--amber-soft); color: #7a4f0c; }

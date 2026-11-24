@@ -15,6 +15,7 @@ function fileStore(name) {
   return {
     getJSON: async (k) => JSON.parse(await fs.readFile(f(k), "utf8").catch(() => "null")),
     setJSON: async (k, v) => { await fs.mkdir(dir, { recursive: true }); await fs.writeFile(f(k), JSON.stringify(v)); },
+    delete: async (k) => { await fs.rm(f(k), { force: true }); },
     listKeys: async () => (await fs.readdir(dir).catch(() => [])).filter((n) => !n.endsWith(".ct")),
     setBinary: async (k, buf, ct) => { await fs.mkdir(dir, { recursive: true }); await fs.writeFile(f(k), buf); await fs.writeFile(f(k) + ".ct", ct); },
     getBinary: async (k) => {
@@ -22,7 +23,7 @@ function fileStore(name) {
     },
   };
 }
-const stores = { jobs: fileStore("jobs"), photos: fileStore("photos"), settings: fileStore("settings"), env: process.env };
+const stores = { jobs: fileStore("jobs"), photos: fileStore("photos"), settings: fileStore("settings"), recurring: fileStore("recurring"), env: process.env };
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");

@@ -16,6 +16,9 @@ const state = {
   reportDate: null,
   detailPeriod: "wtd",
   allJobs: null,
+  recurring: null,
+  recToday: null,
+  recBuilding: "",
 };
 
 const STATUS_LABEL = { open: "Not started", in_progress: "Busy", waiting: "Waiting", done: "Fixed" };
@@ -59,7 +62,7 @@ function suggest(building, cat) {
   if (cat === "paint") return "pathy";
   if (cat === "power") return "kabos";
   const local = state.config.team.find((t) => t.buildings.includes(building));
-  if (cat === "water" && local && local.id === "paul") return "dadou";
+  if ((cat === "water" || cat === "geyser") && local && local.id === "paul") return "dadou";
   return local ? local.id : null;
 }
 
@@ -267,6 +270,7 @@ function render() {
   const tabs = [];
   if (state.user.role === "manager") tabs.push(["all", "All jobs", state.jobs.filter((j) => isActive(j) && !j.assignee).length]);
   if (state.user.role === "manager") tabs.push(["planner", "Planner", state.advice.moves.length]);
+  if (state.user.role === "manager") tabs.push(["planned", "Planned jobs"]);
   if (state.user.role === "manager") tabs.push(["daily", "Daily report"]);
   if (state.user.role === "handyman") tabs.push(["mine", "My jobs", state.jobs.filter((j) => isActive(j) && j.assignee === state.user.team).length]);
   tabs.push(["report", "Report a problem"]);
@@ -281,6 +285,7 @@ function render() {
   if (state.tab === "status") return renderStatus();
   if (state.tab === "planner") return renderPlanner();
   if (state.tab === "daily") return renderDaily();
+  if (state.tab === "planned") return renderPlanned();
   return renderAll();
 }
 
@@ -437,6 +442,7 @@ function jobCard(j) {
     </div>
     <div class="badges">
       ${j.blocking && j.status !== "done" ? `<span class="badge b-out">Room out of order</span>` : ""}
+      ${j.recurringId ? `<span class="badge b-plan">Planned · due ${esc(j.dueDate || "")}</span>` : ""}
       <span class="badge b-${j.status}">${STATUS_LABEL[j.status]}</span>
       ${j.assignee ? `<span class="badge b-who">${esc(teamName(j.assignee) || j.assignee)}</span>` : `<span class="badge b-none">Not assigned</span>`}
       ${j.status !== "done" ? `<span class="badge b-time">~${fmtH(jobMins(j))}</span>` : ""}
@@ -928,10 +934,131 @@ async function renderDaily() {
   $("#detailPeriod").onchange = (e) => { state.detailPeriod = e.target.value; renderDaily(); };
 }
 
+// ---------- planned (recurring) jobs — managers
+const fmtDate = (s) => { if (!s) return "–"; const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", year: "numeric" }); };
+const everyText = (it) => it.every === 1 ? (it.unit === "weeks" ? "Every week" : "Every month") : it.unit === "months" && it.every % 12 === 0 ? `Every ${it.every / 12 === 1 ? "year" : it.every / 12 + " years"}` : `Every ${it.every} ${it.unit}`;
+
+async function loadRecurring() {
+  const r = await api("recurring");
+  state.recurring = r.items;
+  state.recToday = r.today;
+}
+
+async function renderPlanned() {
+  if (!state.recurring) {
+    $("#app").innerHTML = `<p class="muted center pad">Loading planned jobs…</p>`;
+    try { await loadRecurring(); await loadJobs(); } catch (e) { $("#app").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    if (state.tab !== "planned") return;
+    state.plan = buildPlan();
+  }
+  const cfg = state.config;
+  const today = state.recToday;
+  const soon = (() => { const [y, m, d] = today.split("-").map(Number); const x = new Date(Date.UTC(y, m - 1, d + 14)); return x.toISOString().slice(0, 10); })();
+  let items = state.recurring.slice();
+  if (state.recBuilding) items = items.filter((it) => it.building === state.recBuilding);
+  items.sort((a, b) => (b.active - a.active) || a.nextDue.localeCompare(b.nextDue) || a.building.localeCompare(b.building));
+  const openJob = (it) => it.openJobId && state.jobs.find((j) => j.id === it.openJobId && j.status !== "done");
+  const who = (it) => it.assignee ? teamName(it.assignee) : (teamName(suggest(it.building, it.category)) ? teamName(suggest(it.building, it.category)) + " (auto)" : "Manager picks");
+  const dueSoon = state.recurring.filter((it) => it.active && it.nextDue <= soon).length;
+
+  $("#app").innerHTML = `
+    <h2>Planned jobs</h2>
+    <p class="muted" style="margin:0 4px 10px">Jobs that come round again — geyser services, monthly baiting. On the due date each one becomes a normal job for the right person. When it is marked fixed, the next due date is set from that day.</p>
+    <div class="filters">
+      <select id="recB"><option value="">All buildings</option>${cfg.buildings.map((b) => `<option ${state.recBuilding === b ? "selected" : ""}>${esc(b)}</option>`).join("")}</select>
+      <button class="btn gold small" id="recAdd">+ Add planned job</button>
+    </div>
+    <p class="muted" style="font-size:14px;margin:4px">${dueSoon} due in the next 14 days.</p>
+    ${items.length ? items.map((it) => {
+      const oj = openJob(it);
+      const overdue = it.active && !oj && it.nextDue < today;
+      return `<div class="card rec ${it.active ? "" : "done"}" data-rid="${it.id}">
+        <div class="head"><div>
+          <div class="where">${esc(it.building)} · ${esc(it.location || "—")}</div>
+          <div class="what">${esc(it.title)}</div></div>
+          <div class="muted" style="font-size:13px;white-space:nowrap">${esc(everyText(it))}</div></div>
+        <div class="badges">
+          ${!it.active ? `<span class="badge b-none">Paused</span>` : oj ? `<span class="badge b-${oj.status}">Job open · ${STATUS_LABEL[oj.status]}</span>` : `<span class="badge ${overdue ? "b-out" : it.nextDue <= soon ? "b-day" : "b-time"}">Next: ${esc(fmtDate(it.nextDue))}</span>`}
+          <span class="badge b-who">${esc(who(it))}</span>
+          <span class="badge b-time">~${fmtH(it.minutes)}</span>
+          ${it.lastDone ? `<span class="badge b-done">Last done ${esc(fmtDate(it.lastDone))}</span>` : ""}
+        </div>
+        ${it.notes ? `<div class="desc">${esc(it.notes)}</div>` : ""}
+        <div class="actions row"><button class="btn light small" data-redit="${it.id}">Edit</button>${it.active && !oj ? `<button class="btn small" data-rnow="${it.id}">Make the job now</button>` : ""}</div>
+      </div>`;
+    }).join("") : `<div class="empty">No planned jobs${state.recBuilding ? " for " + esc(state.recBuilding) : ""} yet.</div>`}
+    <p class="muted small-note">Hot water: add each geyser as its own planned job (building + where it is, e.g. "Room 12" or "Roof"), or one job for a building's central hot water system. Buildings with no geysers need nothing.</p>`;
+
+  $("#recB").onchange = (e) => { state.recBuilding = e.target.value; renderPlanned(); };
+  $("#recAdd").onclick = () => editPlanned(null);
+  document.querySelectorAll("[data-redit]").forEach((b) => (b.onclick = () => editPlanned(state.recurring.find((x) => x.id === b.dataset.redit))));
+  document.querySelectorAll("[data-rnow]").forEach((b) => (b.onclick = async () => {
+    try {
+      await api(`recurring/${b.dataset.rnow}/now`, { method: "POST" });
+      state.recurring = null; toast("Job created"); renderPlanned();
+    } catch (e) { toast(e.message); }
+  }));
+}
+
+function editPlanned(it) {
+  const cfg = state.config;
+  const isNew = !it;
+  const v = it || { title: "Geyser service", building: state.recBuilding || "", location: "", category: "geyser", every: 12, unit: "months", minutes: 60, nextDue: state.recToday, assignee: "", active: true, notes: "" };
+  const presets = [["Geyser service", "geyser", 12, "months", 60], ["Central hot water service", "geyser", 6, "months", 120], ["Cockroach baiting", "pest", 1, "months", 60]];
+  openSheet(`<h2>${isNew ? "Add planned job" : "Edit planned job"}</h2>
+    ${isNew ? `<div class="chips">${presets.map((p, i) => `<button type="button" class="chip ${v.title === p[0] ? "on" : ""}" data-pre="${i}">${esc(p[0])}</button>`).join("")}</div>` : ""}
+    <label class="f" for="pTitle">What is the job?</label>
+    <input id="pTitle" class="t" maxlength="80" value="${esc(v.title)}">
+    <label class="f" for="pB">Building</label>
+    <select id="pB" class="t"><option value="">Choose…</option>${cfg.buildings.map((b) => `<option ${v.building === b ? "selected" : ""}>${esc(b)}</option>`).join("")}</select>
+    <label class="f" for="pLoc">Where in the building?</label>
+    <input id="pLoc" class="t" maxlength="40" placeholder="e.g. Room 12, Roof, Plant room, All rooms" value="${esc(v.location)}">
+    <label class="f" for="pCat">Kind of job (decides who gets it)</label>
+    <select id="pCat" class="t">${cfg.categories.map((c) => `<option value="${c.id}" ${v.category === c.id ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>
+    <label class="f">How often?</label>
+    <div class="row"><input id="pEvery" class="t" type="number" min="1" max="120" value="${v.every}" style="max-width:90px">
+      <select id="pUnit" class="t"><option value="months" ${v.unit === "months" ? "selected" : ""}>months</option><option value="weeks" ${v.unit === "weeks" ? "selected" : ""}>weeks</option></select></div>
+    <label class="f" for="pDue">Next due</label>
+    <input id="pDue" class="t" type="date" value="${esc(v.nextDue)}">
+    <label class="f" for="pMin">How long does it take?</label>
+    <select id="pMin" class="t">${[15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 480].concat([v.minutes]).filter((x, i, a) => a.indexOf(x) === i).sort((a, b) => a - b).map((m) => `<option value="${m}" ${m === v.minutes ? "selected" : ""}>${fmtH(m)}</option>`).join("")}</select>
+    <label class="f" for="pWho">Who does it?</label>
+    <select id="pWho" class="t"><option value="">Automatic (by building and kind of job)</option>${cfg.team.map((t) => `<option value="${t.id}" ${v.assignee === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select>
+    <label class="f" for="pNotes">Notes for the handyman (optional)</label>
+    <textarea id="pNotes" class="t" maxlength="300" placeholder="e.g. 150 L geyser, isolator in the cupboard">${esc(v.notes || "")}</textarea>
+    ${isNew ? "" : `<label class="f"><input type="checkbox" id="pActive" ${v.active ? "checked" : ""}> Active (untick to pause it)</label>`}
+    <p id="pErr" style="color:var(--red);min-height:1.2em"></p>
+    <div class="row">
+      ${isNew ? "" : `<button class="btn light" id="pDel">Delete</button>`}
+      <button class="btn light" data-close>Cancel</button>
+      <button class="btn gold" id="pSave">Save</button>
+    </div>`, () => {
+    document.querySelectorAll("[data-pre]").forEach((b) => (b.onclick = () => {
+      const p = presets[+b.dataset.pre];
+      $("#pTitle").value = p[0]; $("#pCat").value = p[1]; $("#pEvery").value = p[2]; $("#pUnit").value = p[3]; $("#pMin").value = p[4];
+      if (p[1] === "pest" && !$("#pLoc").value) $("#pLoc").value = "All rooms";
+      document.querySelectorAll("[data-pre]").forEach((x) => x.classList.toggle("on", x === b));
+    }));
+    $("#pSave").onclick = async () => {
+      const body = { id: it ? it.id : undefined, title: $("#pTitle").value, building: $("#pB").value, location: $("#pLoc").value, category: $("#pCat").value,
+        every: +$("#pEvery").value, unit: $("#pUnit").value, nextDue: $("#pDue").value, minutes: +$("#pMin").value, assignee: $("#pWho").value,
+        notes: $("#pNotes").value, active: $("#pActive") ? $("#pActive").checked : true };
+      try {
+        await api("recurring", { method: "POST", body });
+        state.recurring = null; toast("Saved"); renderPlanned();
+      } catch (e) { $("#pErr").textContent = e.message; }
+    };
+    if ($("#pDel")) $("#pDel").onclick = async () => {
+      if (!$("#pDel").dataset.sure) { $("#pDel").dataset.sure = "1"; $("#pDel").textContent = "Tap again to delete"; return; }
+      try { await api(`recurring/${it.id}/delete`, { method: "POST" }); state.recurring = null; toast("Deleted"); renderPlanned(); } catch (e) { $("#pErr").textContent = e.message; }
+    };
+  });
+}
+
 // refresh every minute while the app is open (not while typing a report or using a pop-up)
 setInterval(async () => {
   if (!state.user || document.hidden || state.tab === "report" || !$("#sheet").classList.contains("hidden")) return;
-  try { await loadJobs(); state.allJobs = null; render(); } catch {}
+  try { await loadJobs(); state.allJobs = null; state.recurring = null; render(); } catch {}
 }, 60000);
 
 start();
