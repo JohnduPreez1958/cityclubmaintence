@@ -22,6 +22,16 @@ Jobs where the room **can't be sold** are shown in red and always listed first.
   - **suggested moves**: unassigned jobs, or jobs that would wait for one person while someone else who can do that kind of job has free time today or tomorrow. Tap **Move** or **Not now**.
   - **warnings**: someone not fully allocated today, or booked two or more days ahead.
 
+## Planned jobs (managers)
+
+Jobs that come round again: geyser services, central hot water systems, monthly cockroach baiting.
+
+- **Planned jobs** tab: add, edit, pause or delete them. Each has a building, where it is (a room, "Roof", "All rooms"), how often (weeks or months), the next due date, a set time and who does it (automatic, or a chosen person).
+- On the due date it becomes a normal job on that person's list (marked *Planned*), and the planner fits it into their days.
+- When it is marked fixed, the next due date is set from the day it was done.
+- Geysers are not one per room and some buildings have a central system, so add each geyser, or the building's central system, as its own planned job. Buildings with no geysers need nothing.
+- The first time it runs, the app adds monthly cockroach baiting for every building (5 minutes a room), spread from the 1st of next month so they don't all fall on one day. Change the dates and times to suit.
+
 ## Daily report (managers)
 
 The **Daily report** tab shows all maintenance staff on one page, for any date:

@@ -7,6 +7,7 @@ function store(name) {
   return {
     getJSON: (k) => s.get(k, { type: "json" }),
     setJSON: (k, v) => s.setJSON(k, v),
+    delete: (k) => s.delete(k),
     listKeys: async () => (await s.list()).blobs.map((b) => b.key),
     setBinary: (k, buf, contentType) => s.set(k, buf, { metadata: { contentType } }),
     getBinary: async (k) => {
@@ -17,6 +18,6 @@ function store(name) {
 }
 
 export default async (req) =>
-  handle(req, { jobs: store("maintenance-jobs"), photos: store("maintenance-photos"), settings: store("maintenance-settings"), env: process.env });
+  handle(req, { jobs: store("maintenance-jobs"), photos: store("maintenance-photos"), settings: store("maintenance-settings"), recurring: store("maintenance-recurring"), env: process.env });
 
 export const config = { path: "/api/*" };
