@@ -229,6 +229,18 @@ async function loadJobs() {
   state.jobs = jobs;
 }
 
+// simple line icons for the bottom menu bar
+const svg = (d) => `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const ICON = {
+  calendar: svg('<rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/><path d="M7.5 13.5h3v3h-3z"/>'),
+  jobs: svg('<path d="M14.7 6.3a4 4 0 0 0-5.3 5.3L3 18l3 3 6.4-6.4a4 4 0 0 0 5.3-5.3l-2.6 2.6-2.4-.6-.6-2.4z"/>'),
+  planner: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
+  planned: svg('<path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>'),
+  reports: svg('<path d="M3 21h18"/><rect x="5" y="11" width="3" height="7"/><rect x="10.5" y="6" width="3" height="12"/><rect x="16" y="9" width="3" height="9"/>'),
+  status: svg('<rect x="5" y="3.5" width="14" height="18" rx="2"/><path d="M9 3.5V2.5h6v1M8.5 10h7M8.5 14h7M8.5 18h4"/>'),
+  plus: svg('<path d="M12 5v14M5 12h14"/>'),
+};
+
 // ---------- render
 function render() {
   const app = $("#app");
@@ -271,19 +283,23 @@ function render() {
     state.advice = advise(state.plan);
     state.advice.moves = state.advice.moves.filter((m) => !state.dismissed.has(m.job.id + ">" + m.to));
   }
+  // bottom menu bar (phone-app style) with a big + in the middle for reporting a problem
+  const r = state.user.role;
+  const unassignedN = state.jobs.filter((j) => isActive(j) && !j.assignee).length;
   const tabs = [];
-  if (state.user.role === "manager") tabs.push(["calendar", "Calendar"]);
-  if (state.user.role === "manager") tabs.push(["all", "All jobs", state.jobs.filter((j) => isActive(j) && !j.assignee).length]);
-  if (state.user.role === "manager") tabs.push(["planner", "Planner", state.advice.moves.length]);
-  if (state.user.role === "manager") tabs.push(["planned", "Planned jobs"]);
-  if (state.user.role === "manager") tabs.push(["daily", "Daily report"]);
-  if (state.user.role === "handyman") tabs.push(["mine", "My jobs", state.jobs.filter((j) => isActive(j) && j.assignee === state.user.team).length]);
-  tabs.push(["report", "Report a problem"]);
-  if (state.user.role === "staff") tabs.push(["status", "Job status"]);
+  if (r === "manager") {
+    tabs.push(["calendar", ICON.calendar, "Calendar"], ["all", ICON.jobs, "Jobs", unassignedN], ["report", ICON.plus, "Report"],
+      ["planner", ICON.planner, "Planner", state.advice.moves.length], ["planned", ICON.planned, "Planned"], ["daily", ICON.reports, "Reports"]);
+  } else if (r === "handyman") {
+    tabs.push(["mine", ICON.jobs, "My jobs", state.jobs.filter((j) => isActive(j) && j.assignee === state.user.team).length], ["report", ICON.plus, "Report"]);
+  } else {
+    tabs.push(["status", ICON.status, "Job status"], ["report", ICON.plus, "Report"]);
+  }
   $("#tabs").innerHTML = tabs
-    .map(([id, label, n]) => `<button data-tab="${id}" class="${state.tab === id ? "on" : ""}">${label}${n ? `<span class="count">${n}</span>` : ""}</button>`)
+    .map(([id, icon, label, n]) => `<button data-tab="${id}" class="${state.tab === id ? "on" : ""} ${id === "report" ? "plus" : ""}">
+      <span class="ico">${icon}</span><span class="lbl">${label}</span>${n ? `<span class="count">${n}</span>` : ""}</button>`)
     .join("");
-  document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => { state.tab = b.dataset.tab; render(); }));
+  document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => { state.tab = b.dataset.tab; render(); window.scrollTo(0, 0); }));
 
   if (state.tab === "report") return renderReport();
   if (state.tab === "mine") return renderMine();
@@ -586,8 +602,15 @@ function list(jobs, emptyMsg) {
 }
 
 // Handyman's job card: one big button that changes as the job moves on; the rest under "More".
+function startTimeOf(j) {
+  const segs = (state.plan.person[state.user.team] || {}).segs || [];
+  const d = state.plan.jobDay[j.id];
+  const sg = d !== undefined && (segs[d] || []).find((x) => x.job.id === j.id);
+  return sg ? hhmm(sg.start) : null;
+}
 function handyCard(j, opts = {}) {
   const me = state.user.team;
+  const at = j.assignee === me && j.status !== "waiting" && j.status !== "in_progress" ? startTimeOf(j) : null;
   const mine = j.assignee === me;
   let primary = "";
   if (!j.assignee) primary = `<button class="btn gold big" data-act="take">Take this job</button>`;
@@ -601,8 +624,8 @@ function handyCard(j, opts = {}) {
       <button class="btn light small" data-act="note">Add note</button></div></details>` : "";
   return `<div class="card job hcard ${j.blocking ? "blocking" : ""} ${opts.next ? "next" : ""}" data-id="${j.id}">
     ${opts.next ? `<div class="nextlbl">${j.status === "in_progress" ? "You're working on" : "Next job"}</div>` : ""}
-    <div class="where">${esc(j.building)} · ${esc(j.room)}</div>
-    <div class="what">${esc(catLabel(j.category))}</div>
+    <div class="hhead"><div><div class="where">${esc(j.building)} · ${esc(j.room)}</div>
+    <div class="what">${esc(catLabel(j.category))}</div></div>${at ? `<div class="at">${at}</div>` : ""}</div>
     <div class="badges">
       ${j.blocking ? `<span class="badge b-out">Room out of order</span>` : ""}
       ${j.status === "in_progress" ? `<span class="badge b-in_progress">Busy</span>` : ""}
