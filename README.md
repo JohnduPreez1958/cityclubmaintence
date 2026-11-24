@@ -12,6 +12,14 @@ Report maintenance problems, send them to the right handyman, and track which ro
 
 Jobs where the room **can't be sold** are shown in red and always listed first.
 
+## Getting around
+
+A menu bar along the bottom, like a phone app, with a big gold **+** in the middle to report a problem from anywhere.
+
+- Managers: Calendar · Jobs · **+** · Planner · Planned · Reports
+- Handymen: My jobs · **+**
+- Other staff: Job status · **+**
+
 ## Calendar (managers)
 
 The first tab for managers. One column per handyman, the working day down the side, and each job as a coloured block sized by its set time: red = room out of order, blue = busy, grey = to do, purple = planned job, green = fixed. A red line shows the time now.
@@ -23,6 +31,7 @@ The first tab for managers. One column per handyman, the working day down the si
 ## What a handyman sees
 
 - A progress bar: how many of today's jobs are done.
+- Each job shows roughly what time he should get to it (worked out from the set times), like an appointment list.
 - **Next job** at the top, with one big button that changes as he goes: **▶ Start**, then **✓ Fixed — take photo** (the camera opens straight away). *Waiting for…*, *Add note* and *Mark fixed* are under **More**.
 - The rest of today: out-of-order rooms first, then grouped by building, so he finishes one building before moving to the next. Later days follow.
 - Jobs nobody has yet (**Take this job**) and what he fixed today.
