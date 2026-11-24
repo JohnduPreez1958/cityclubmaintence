@@ -579,6 +579,56 @@ function list(jobs, emptyMsg) {
   return jobs.length ? jobs.map(jobCard).join("") : `<div class="empty">${emptyMsg}</div>`;
 }
 
+// Handyman's job card: one big button that changes as the job moves on; the rest under "More".
+function handyCard(j, opts = {}) {
+  const me = state.user.team;
+  const mine = j.assignee === me;
+  let primary = "";
+  if (!j.assignee) primary = `<button class="btn gold big" data-act="take">Take this job</button>`;
+  else if (mine && j.status === "in_progress") primary = `<button class="btn green big" data-act="done">✓ Fixed — take photo</button>`;
+  else if (mine && j.status === "waiting") primary = `<button class="btn big" data-act="start">▶ Start again</button>`;
+  else if (mine) primary = `<button class="btn big" data-act="start">▶ Start</button>`;
+  const waitText = j.status === "waiting" ? (j.history.filter((h) => h.text.startsWith("Waiting:")).pop() || { text: "" }).text.replace("Waiting: ", "") : "";
+  const more = mine ? `<details class="more"><summary>More</summary><div class="row">
+      ${j.status !== "in_progress" ? `<button class="btn light small" data-act="done">Mark fixed</button>` : ""}
+      ${j.status !== "waiting" ? `<button class="btn light small" data-act="wait">Waiting for…</button>` : ""}
+      <button class="btn light small" data-act="note">Add note</button></div></details>` : "";
+  return `<div class="card job hcard ${j.blocking ? "blocking" : ""} ${opts.next ? "next" : ""}" data-id="${j.id}">
+    ${opts.next ? `<div class="nextlbl">${j.status === "in_progress" ? "You're working on" : "Next job"}</div>` : ""}
+    <div class="where">${esc(j.building)} · ${esc(j.room)}</div>
+    <div class="what">${esc(catLabel(j.category))}</div>
+    <div class="badges">
+      ${j.blocking ? `<span class="badge b-out">Room out of order</span>` : ""}
+      ${j.status === "in_progress" ? `<span class="badge b-in_progress">Busy</span>` : ""}
+      ${j.status === "waiting" ? `<span class="badge b-waiting">Waiting: ${esc(waitText)}</span>` : ""}
+      ${j.recurringId ? `<span class="badge b-plan">Planned job</span>` : ""}
+      <span class="badge b-time">~${fmtH(jobMins(j))}</span>
+    </div>
+    ${j.description ? `<div class="desc">${esc(j.description)}</div>` : ""}
+    ${j.photo ? `<div class="thumbs"><img src="${photoUrl(j.photo)}" data-full="${photoUrl(j.photo)}" alt="Problem photo" loading="lazy"></div>` : ""}
+    ${primary}
+    ${more}
+  </div>`;
+}
+
+// Out-of-order rooms first, then the rest grouped by building so he finishes one building before the next.
+function routeOrder(list) {
+  const urgent = list.slice().sort(planOrder);
+  const order = [];
+  urgent.forEach((j) => { if (!order.includes(j.building)) order.push(j.building); });
+  return urgent.sort((a, b) => ((b.status === "in_progress") - (a.status === "in_progress")) || (b.blocking - a.blocking)
+    || (order.indexOf(a.building) - order.indexOf(b.building)) || (a.createdAt - b.createdAt));
+}
+function withBuildingHeads(list) {
+  let last = null;
+  return list.map((j) => {
+    const key = j.blocking ? "!out" : j.building;
+    const head = key !== last ? `<div class="bhead">${j.blocking ? "🔴 Rooms out of order — do these first" : "📍 " + esc(j.building)}</div>` : "";
+    last = key;
+    return head + handyCard(j);
+  }).join("");
+}
+
 function renderMine() {
   const me = state.user.team;
   const myBuildings = (state.config.team.find((t) => t.id === me) || { buildings: [] }).buildings;
@@ -586,20 +636,29 @@ function renderMine() {
   const planned = state.jobs.filter((j) => isActive(j) && j.assignee === me && j.status !== "waiting");
   const waiting = state.jobs.filter((j) => j.status === "waiting" && j.assignee === me);
   const unassigned = state.jobs.filter((j) => isActive(j) && !j.assignee).sort((a, b) => (myBuildings.includes(b.building) - myBuildings.includes(a.building)) || byPriority(a, b));
-  const doneRecent = state.jobs.filter((j) => j.status === "done" && j.assignee === me).sort((a, b) => b.doneAt - a.doneAt).slice(0, 5);
-  const off = dayOffOf(me) === new Date().getDay();
+  const now = new Date();
+  const doneToday = state.jobs.filter((j) => j.status === "done" && j.assignee === me && j.doneAt && sameDay(j.doneAt, now));
+  const off = dayOffOf(me) === now.getDay();
   const groups = {};
-  for (const j of planned.sort(planOrder)) (groups[plan.jobDay[j.id] ?? 0] = groups[plan.jobDay[j.id] ?? 0] || []).push(j);
+  for (const j of planned) (groups[plan.jobDay[j.id] ?? 0] = groups[plan.jobDay[j.id] ?? 0] || []).push(j);
+  const days = Object.keys(groups).map(Number).sort((a, b) => a - b);
+  for (const d of days) groups[d] = routeOrder(groups[d]);
+  const next = days.length ? groups[days[0]][0] : null;
+  if (next) groups[days[0]] = groups[days[0]].slice(1);
+  const todayLeft = (groups[0] || []).length + (next && days[0] === 0 ? 1 : 0);
+  const total = doneToday.length + todayLeft;
+  const pct = total ? Math.round((doneToday.length / total) * 100) : 0;
   const used = plan.person[me] ? plan.person[me].used : [];
-  const dayHtml = Object.keys(groups).map(Number).sort((a, b) => a - b)
-    .map((d) => `<h3>${dayLabel(d)} <span style="text-transform:none;letter-spacing:0;font-weight:400">· ${fmtH(used[d] || 0)} of work</span></h3>${list(groups[d], "")}`).join("");
+
   $("#app").innerHTML = `
-    <h2>My jobs</h2>
-    ${off ? `<div class="goes-to" style="margin-bottom:10px">Today is your day off. These jobs are planned for your next working days.</div>` : ""}
-    ${dayHtml || `<div class="empty">No jobs for you right now. 👍</div>`}
-    ${waiting.length ? `<h3>Waiting for something</h3>${list(waiting, "")}` : ""}
-    ${unassigned.length ? `<h3>Not assigned yet</h3>${list(unassigned, "")}` : ""}
-    ${doneRecent.length ? `<h3>Recently fixed</h3>${list(doneRecent, "")}` : ""}`;
+    ${off ? `<div class="goes-to" style="margin-bottom:10px">Today is your day off. These jobs are for your next working days.</div>` : ""}
+    ${total ? `<div class="progress-wrap"><div class="progress"><div style="width:${pct}%"></div></div>
+      <div class="progress-text"><b>${doneToday.length} of ${total}</b> done today${todayLeft ? ` · about ${fmtH(used[0] || 0)} of work left` : " · all done 👍"}</div></div>` : ""}
+    ${next ? handyCard(next, { next: true }) : `<div class="empty">No jobs for you right now. 👍</div>`}
+    ${days.map((d) => groups[d].length ? `<h3>${d === 0 ? "Rest of today" : dayLabel(d)}</h3>${withBuildingHeads(groups[d])}` : "").join("")}
+    ${waiting.length ? `<h3>Waiting for something</h3>${waiting.map((j) => handyCard(j)).join("")}` : ""}
+    ${unassigned.length ? `<h3>Nobody has these yet</h3>${unassigned.map((j) => handyCard(j)).join("")}` : ""}
+    ${doneToday.length ? `<h3>Fixed today</h3><div class="card">${doneToday.sort((a, b) => b.doneAt - a.doneAt).map((j) => `<div class="doneline">✓ ${esc(j.building)} ${esc(j.room)} — ${esc(catLabel(j.category))} <span class="muted">${shortTime(j.doneAt)}</span></div>`).join("")}</div>` : ""}`;
   wireCards();
 }
 

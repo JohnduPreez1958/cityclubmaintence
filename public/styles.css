@@ -219,3 +219,19 @@ section.detail { overflow-x: auto; }
   .explain, table.rep tr { break-inside: avoid; }
   .explain b { font-size: 16px; }
 }
+
+/* handyman screen */
+.btn.big { display: block; width: 100%; padding: 16px; font-size: 18px; margin-top: 12px; border-radius: 14px; }
+.hcard.next { border: 2px solid var(--gold); border-left-width: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.06); }
+.hcard.next.blocking { border-color: var(--red); }
+.nextlbl { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #7a5717; margin-bottom: 4px; }
+.hcard .where { font-size: 19px; }
+details.more { margin-top: 8px; }
+details.more summary { color: var(--muted); font-size: 14px; cursor: pointer; padding: 6px 2px; }
+details.more .row { margin-top: 6px; }
+.bhead { font-weight: 700; font-size: 15px; margin: 14px 4px 6px; }
+.progress-wrap { margin: 4px 2px 14px; }
+.progress { height: 10px; background: #e6e2da; border-radius: 6px; overflow: hidden; }
+.progress > div { height: 100%; background: var(--green); border-radius: 6px; }
+.progress-text { font-size: 15px; margin-top: 6px; }
+.doneline { padding: 4px 0; }
