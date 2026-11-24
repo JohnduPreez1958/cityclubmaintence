@@ -162,3 +162,37 @@ table.week td.off, table.week td.gone { background: #f1efeb; color: var(--muted)
 .dayoff { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
 .dayoff + .dayoff { border-top: 1px solid var(--line); }
 .dayoff select { padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: #fff; min-width: 150px; }
+
+/* Daily report */
+main:has(.report) { max-width: 1200px; }
+.rep-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 8px 4px 10px; }
+table.rep { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 13px; }
+table.rep th, table.rep td { padding: 7px 8px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.rep th { font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+table.rep th.grp { text-align: center; border-left: 1px solid var(--line); background: #faf8f4; }
+table.rep .num { text-align: right; white-space: nowrap; }
+table.rep tr.total th, table.rep tr.total td { border-top: 2px solid var(--ink); font-weight: 700; }
+.over { color: var(--green); }
+.under { color: var(--red); }
+table.rep.list td div { padding: 2px 0; }
+table.rep.plan7 td { border-left: 1px solid var(--line); min-width: 92px; }
+.cellh { font-weight: 700; font-size: 12px; margin-bottom: 4px; }
+.cellh.fullh { color: var(--green); }
+.pj { font-size: 12px; padding: 3px 5px; margin-bottom: 3px; border-radius: 6px; background: #f3f1ec; line-height: 1.25; }
+.pj span { color: var(--muted); }
+.pj.blk { background: var(--red-soft); }
+td.offc { color: var(--muted); background: #f1efeb; text-align: center !important; vertical-align: middle !important; }
+.small-note { font-size: 12px; margin: 6px 4px; }
+
+@media print {
+  @page { size: A4 landscape; margin: 10mm; }
+  body { background: #fff; font-size: 11px; }
+  .top, #banner, nav#tabs, .noprint, .toast, .sheet { display: none !important; }
+  main { max-width: none; padding: 0; }
+  .weekwrap { overflow: visible; border: 0; }
+  table.rep { min-width: 0; font-size: 10.5px; }
+  table.rep tr { break-inside: avoid; }
+  h3 { margin-top: 14px; }
+  h3.pagebreak { break-before: page; margin-top: 0; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

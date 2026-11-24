@@ -13,6 +13,8 @@ const state = {
   plan: null,
   advice: null,
   dismissed: new Set(),
+  reportDate: null,
+  allJobs: null,
 };
 
 const STATUS_LABEL = { open: "Not started", in_progress: "Busy", waiting: "Waiting", done: "Fixed" };
@@ -64,7 +66,7 @@ function suggest(building, cat) {
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const HORIZON = 60; // days looked ahead
 const jobMins = (j) => j.minutes || (state.config.categories.find((c) => c.id === j.category) || {}).minutes || 60;
-const fmtH = (m) => (m >= 60 ? Math.round(m / 6) / 10 + " h" : Math.round(m) + " min");
+const fmtH = (m) => (!m ? "0 h" : m >= 60 ? Math.round(m / 6) / 10 + " h" : Math.round(m) + " min");
 const workers = () => state.config.team.filter((t) => !t.external);
 const dayOffOf = (id) => { const v = (state.config.settings.daysOff || {})[id]; return v === undefined ? null : v; };
 function dateAt(d, now = new Date()) { const x = new Date(now); x.setHours(12, 0, 0, 0); x.setDate(x.getDate() + d); return x; }
@@ -264,6 +266,7 @@ function render() {
   const tabs = [];
   if (state.user.role === "manager") tabs.push(["all", "All jobs", state.jobs.filter((j) => isActive(j) && !j.assignee).length]);
   if (state.user.role === "manager") tabs.push(["planner", "Planner", state.advice.moves.length]);
+  if (state.user.role === "manager") tabs.push(["daily", "Daily report"]);
   if (state.user.role === "handyman") tabs.push(["mine", "My jobs", state.jobs.filter((j) => isActive(j) && j.assignee === state.user.team).length]);
   tabs.push(["report", "Report a problem"]);
   if (state.user.role === "staff") tabs.push(["status", "Job status"]);
@@ -276,6 +279,7 @@ function render() {
   if (state.tab === "mine") return renderMine();
   if (state.tab === "status") return renderStatus();
   if (state.tab === "planner") return renderPlanner();
+  if (state.tab === "daily") return renderDaily();
   return renderAll();
 }
 
@@ -711,10 +715,123 @@ function renderAll() {
   wireCards();
 }
 
+// ---------- daily report
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const sameDay = (ts, d) => { const x = new Date(ts); return x.getFullYear() === d.getFullYear() && x.getMonth() === d.getMonth() && x.getDate() === d.getDate(); };
+const signedH = (m) => (m > 0 ? "+" : m < 0 ? "−" : "") + fmtH(Math.abs(m)).replace("0 min", "0 h");
+const varCls = (m) => (m > 0 ? "over" : m < 0 ? "under" : "");
+// Budget counts from the first day the app was used, and only the hours already worked today.
+function trackingStart() {
+  const all = state.allJobs || state.jobs;
+  if (!all.length) return null;
+  const d = new Date(Math.min(...all.map((j) => j.createdAt))); d.setHours(0, 0, 0, 0);
+  return d;
+}
+function budgetFor(id, d) {
+  const { start, end } = state.config.work;
+  const ts = trackingStart();
+  if (dayOffOf(id) === d.getDay() || !ts || d < ts) return 0;
+  const now = new Date();
+  if (sameDay(now.getTime(), d)) {
+    const n = now.getHours() * 60 + now.getMinutes();
+    return Math.max(0, Math.min(end * 60, n) - start * 60);
+  }
+  return d > now ? 0 : (end - start) * 60;
+}
+function fixedOn(id, d) { return (state.allJobs || state.jobs).filter((j) => j.status === "done" && j.assignee === id && j.doneAt && sameDay(j.doneAt, d)); }
+function perfRange(id, from, to) {
+  let budget = 0, done = 0, jobs = 0;
+  for (const d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+    budget += budgetFor(id, d);
+    const f = fixedOn(id, d);
+    jobs += f.length;
+    done += f.reduce((s, j) => s + jobMins(j), 0);
+  }
+  return { budget, done, jobs, diff: done - budget };
+}
+
+async function renderDaily() {
+  if (!state.reportDate) state.reportDate = ymd(new Date());
+  if (!state.allJobs) {
+    $("#app").innerHTML = `<p class="muted center pad">Loading report…</p>`;
+    try { state.allJobs = (await api("jobs?all=1")).jobs; } catch (e) { $("#app").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    if (state.tab !== "daily") return;
+  }
+  const [y, mo, da] = state.reportDate.split("-").map(Number);
+  const D = new Date(y, mo - 1, da, 12);
+  const today = new Date(); today.setHours(12, 0, 0, 0);
+  const isToday = ymd(D) === ymd(today);
+  const weekStart = new Date(D); weekStart.setDate(D.getDate() - ((D.getDay() + 6) % 7)); // Monday
+  const monthStart = new Date(D.getFullYear(), D.getMonth(), 1, 12);
+  const ws = workers();
+  const rows = ws.map((w) => ({ w, day: perfRange(w.id, D, D), wtd: perfRange(w.id, weekStart, D), mtd: perfRange(w.id, monthStart, D),
+    open: state.jobs.filter((j) => isActive(j) && j.assignee === w.id) }));
+  const tot = (k) => rows.reduce((a, r) => ({ budget: a.budget + r[k].budget, done: a.done + r[k].done, jobs: a.jobs + r[k].jobs, diff: a.diff + r[k].diff }), { budget: 0, done: 0, jobs: 0, diff: 0 });
+  const T = { day: tot("day"), wtd: tot("wtd"), mtd: tot("mtd") };
+  const vcell = (p) => `<td class="num ${varCls(p.diff)}"><b>${signedH(p.diff)}</b></td>`;
+  const longDate = D.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const plan = state.plan;
+  const NDAYS = 7;
+  const unsetOff = ws.filter((w) => dayOffOf(w.id) === null);
+
+  $("#app").innerHTML = `
+  <div class="report">
+    <div class="rep-head">
+      <div><h2 style="margin:0">Daily maintenance report</h2><div class="muted">${esc(longDate)}${isToday ? " · so far today" : ""}</div></div>
+      <div class="row noprint"><input type="date" id="repDate" value="${state.reportDate}" max="${ymd(today)}" class="t" style="width:auto">
+        <button class="btn light small" id="repPrint">Print / save PDF</button></div>
+    </div>
+    ${unsetOff.length ? `<div class="warnline info noprint">Days off are not set for ${unsetOff.map((w) => w.name).join(", ")}, so every day counts as a working day in their budget. Set them in Planner.</div>` : ""}
+
+    <h3>Performance against budget</h3>
+    <div class="weekwrap"><table class="rep">
+      <tr><th rowspan="2">Maintenance</th><th colspan="4" class="grp">${isToday ? "Today" : "This day"}</th><th colspan="3" class="grp">Week to date</th><th colspan="3" class="grp">Month to date</th><th rowspan="2" class="num">Still open</th></tr>
+      <tr><th class="num">Budget</th><th class="num">Done</th><th class="num">Jobs</th><th class="num">Over / under</th>
+        <th class="num">Budget</th><th class="num">Done</th><th class="num">Over / under</th>
+        <th class="num">Budget</th><th class="num">Done</th><th class="num">Over / under</th></tr>
+      ${rows.map((r) => `<tr><th>${esc(r.w.name)}${dayOffOf(r.w.id) === D.getDay() ? ` <span class="muted" style="font-weight:400">(off)</span>` : ""}</th>
+        <td class="num">${fmtH(r.day.budget)}</td><td class="num">${fmtH(r.day.done)}</td><td class="num">${r.day.jobs}</td>${vcell(r.day)}
+        <td class="num">${fmtH(r.wtd.budget)}</td><td class="num">${fmtH(r.wtd.done)}</td>${vcell(r.wtd)}
+        <td class="num">${fmtH(r.mtd.budget)}</td><td class="num">${fmtH(r.mtd.done)}</td>${vcell(r.mtd)}
+        <td class="num">${r.open.length} · ${fmtH(r.open.reduce((s, j) => s + jobMins(j), 0))}</td></tr>`).join("")}
+      <tr class="total"><th>Total</th>
+        <td class="num">${fmtH(T.day.budget)}</td><td class="num">${fmtH(T.day.done)}</td><td class="num">${T.day.jobs}</td>${vcell(T.day)}
+        <td class="num">${fmtH(T.wtd.budget)}</td><td class="num">${fmtH(T.wtd.done)}</td>${vcell(T.wtd)}
+        <td class="num">${fmtH(T.mtd.budget)}</td><td class="num">${fmtH(T.mtd.done)}</td>${vcell(T.mtd)}
+        <td class="num">${rows.reduce((s, r) => s + r.open.length, 0)}</td></tr>
+    </table></div>
+    <p class="muted small-note">Budget = working hours (${state.config.work.start}:00–${state.config.work.end}:00, nothing on a day off${isToday ? "; today only counts the hours worked so far" : ""}${trackingStart() ? `; counted from ${trackingStart().toLocaleDateString([], { day: "numeric", month: "short" })}, when the app was first used` : ""}). Done = the set time of each job they marked fixed. <span class="over">+ over</span> means more work done than budgeted, <span class="under">− under</span> means less.</p>
+
+    <h3>Jobs fixed — ${esc(D.toLocaleDateString([], { day: "numeric", month: "short" }))}</h3>
+    <div class="weekwrap"><table class="rep list">
+      ${ws.map((w) => {
+        const f = fixedOn(w.id, D).sort((a, b) => a.doneAt - b.doneAt);
+        return `<tr><th>${esc(w.name)}</th><td>${f.length ? f.map((j) => `<div>${new Date(j.doneAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · <b>${esc(j.building)} ${esc(j.room)}</b> — ${esc(catLabel(j.category))} (${fmtH(jobMins(j))})${j.afterPhoto ? ' <span class="muted">📷</span>' : ""}${j.doneNote ? ` <span class="muted">“${esc(j.doneNote)}”</span>` : ""}</div>`).join("") : `<span class="muted">Nothing fixed</span>`}</td></tr>`;
+      }).join("")}
+    </table></div>
+
+    <h3 class="pagebreak">Next 7 days — planned work</h3>
+    <div class="weekwrap"><table class="rep plan7">
+      <thead><tr><th></th>${Array.from({ length: NDAYS }, (_, d) => `<th>${dayLabel(d, true)}</th>`).join("")}</tr></thead>
+      ${ws.map((w) => `<tr><th>${esc(w.name)}</th>${Array.from({ length: NDAYS }, (_, d) => {
+        if (dayOffOf(w.id) === dateAt(d).getDay()) return `<td class="offc">Off</td>`;
+        const js = plan.person[w.id].jobsByDay[d] || [];
+        const used = plan.person[w.id].used[d] || 0;
+        const cap = capacity(w.id, d, plan.now);
+        return `<td><div class="cellh ${used >= cap && cap ? "fullh" : ""}">${used ? fmtH(used) : "0 h"} / ${fmtH(d === 0 ? cap : (state.config.work.end - state.config.work.start) * 60)}</div>
+          ${js.map((j) => `<div class="pj ${j.blocking ? "blk" : ""}">${esc(j.building)} ${esc(j.room)}<br><span>${esc(catLabel(j.category).split(" (")[0])} · ${fmtH(jobMins(j))}</span></div>`).join("")}</td>`;
+      }).join("")}</tr>`).join("")}
+    </table></div>
+    <p class="muted small-note">Planned from now, most urgent first. Red = room out of order. Jobs that are waiting or not assigned are not shown${state.jobs.filter((j) => isActive(j) && !j.assignee).length ? ` — <b>${state.jobs.filter((j) => isActive(j) && !j.assignee).length} job(s) not assigned yet</b>` : ""}.</p>
+  </div>`;
+  $("#repDate").onchange = (e) => { if (e.target.value) { state.reportDate = e.target.value; renderDaily(); } };
+  $("#repPrint").onclick = () => window.print();
+}
+
 // refresh every minute while the app is open (not while typing a report or using a pop-up)
 setInterval(async () => {
   if (!state.user || document.hidden || state.tab === "report" || !$("#sheet").classList.contains("hidden")) return;
-  try { await loadJobs(); render(); } catch {}
+  try { await loadJobs(); state.allJobs = null; render(); } catch {}
 }, 60000);
 
 start();

@@ -22,6 +22,16 @@ Jobs where the room **can't be sold** are shown in red and always listed first.
   - **suggested moves**: unassigned jobs, or jobs that would wait for one person while someone else who can do that kind of job has free time today or tomorrow. Tap **Move** or **Not now**.
   - **warnings**: someone not fully allocated today, or booked two or more days ahead.
 
+## Daily report (managers)
+
+The **Daily report** tab shows all maintenance staff on one page, for any date:
+
+- **Performance against budget** for the day, week to date and month to date. Budget = working hours (none on a day off, and only hours already worked for today). Done = the set time of each job they marked fixed. The over/under column is Done minus Budget, with a total row.
+- **Jobs fixed** that day by each person.
+- **Next 7 days**: each person's planned jobs per day.
+
+**Print / save PDF** gives an A4 landscape copy: performance on page 1, the 7-day plan from page 2.
+
 Who can be given which kind of job is set in `lib/config.mjs` (`can:`); the working hours are set there too (`WORK`).
 
 ## Who a new job goes to
