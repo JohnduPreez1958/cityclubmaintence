@@ -12,6 +12,13 @@ Report maintenance problems, send them to the right handyman, and track which ro
 
 Jobs where the room **can't be sold** are shown in red and always listed first.
 
+## What a handyman sees
+
+- A progress bar: how many of today's jobs are done.
+- **Next job** at the top, with one big button that changes as he goes: **▶ Start**, then **✓ Fixed — take photo** (the camera opens straight away). *Waiting for…*, *Add note* and *Mark fixed* are under **More**.
+- The rest of today: out-of-order rooms first, then grouped by building, so he finishes one building before moving to the next. Later days follow.
+- Jobs nobody has yet (**Take this job**) and what he fixed today.
+
 ## Planning the days
 
 - Each type of job has a rough time (for example a toilet 1 h, painting 4 h). Managers can change the time on any job under **Manage**.
