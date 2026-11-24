@@ -12,6 +12,14 @@ Report maintenance problems, send them to the right handyman, and track which ro
 
 Jobs where the room **can't be sold** are shown in red and always listed first.
 
+## Calendar (managers)
+
+The first tab for managers. One column per handyman, the working day down the side, and each job as a coloured block sized by its set time: red = room out of order, blue = busy, grey = to do, purple = planned job, green = fixed. A red line shows the time now.
+
+- Arrows move between days (up to a week back and two weeks ahead).
+- Jobs nobody has yet are listed at the top. Tap one, or any block, to see the job and give it to someone (★ marks the usual person).
+- Times are worked out from each job's set time, most urgent first.
+
 ## What a handyman sees
 
 - A progress bar: how many of today's jobs are done.

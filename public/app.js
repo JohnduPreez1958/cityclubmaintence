@@ -19,6 +19,7 @@ const state = {
   recurring: null,
   recToday: null,
   recBuilding: "",
+  calDay: 0,
 };
 
 const STATUS_LABEL = { open: "Not started", in_progress: "Busy", waiting: "Waiting", done: "Fixed" };
@@ -94,21 +95,24 @@ function buildPlan(now = new Date()) {
   const plan = { person: {}, jobDay: {}, now };
   for (const w of workers()) {
     const queue = state.jobs.filter((j) => isActive(j) && j.status !== "waiting" && j.assignee === w.id).sort(planOrder);
-    const used = [], jobsByDay = [];
-    let d = 0, rem = capacity(w.id, 0, now);
+    const used = [], jobsByDay = [], segs = [];
+    const dayStartMin = (d) => d === 0 ? Math.max(state.config.work.start * 60, now.getHours() * 60 + now.getMinutes()) : state.config.work.start * 60;
+    let d = 0, rem = capacity(w.id, 0, now), clock = dayStartMin(0);
     for (const j of queue) {
       let m = jobMins(j), first = true;
       while (m > 0 && d < HORIZON) {
-        if (rem <= 0) { d++; rem = capacity(w.id, d, now); continue; }
+        if (rem <= 0) { d++; rem = capacity(w.id, d, now); clock = dayStartMin(d); continue; }
         if (first) { plan.jobDay[j.id] = d; first = false; }
         const t = Math.min(m, rem);
+        (segs[d] = segs[d] || []).push({ job: j, start: clock, mins: t });
+        clock += t;
         rem -= t; m -= t;
         used[d] = (used[d] || 0) + t;
         (jobsByDay[d] = jobsByDay[d] || []).push(j);
       }
     }
     const lastDay = queue.length ? Math.max(...queue.map((j) => plan.jobDay[j.id] ?? 0)) : -1;
-    plan.person[w.id] = { used, jobsByDay, lastDay };
+    plan.person[w.id] = { used, jobsByDay, lastDay, segs };
   }
   return plan;
 }
@@ -218,7 +222,7 @@ async function start() {
   render();
 }
 function defaultTab() {
-  return state.user.role === "manager" ? "all" : state.user.role === "handyman" ? "mine" : "report";
+  return state.user.role === "manager" ? "calendar" : state.user.role === "handyman" ? "mine" : "report";
 }
 async function loadJobs() {
   const { jobs } = await api("jobs");
@@ -268,6 +272,7 @@ function render() {
     state.advice.moves = state.advice.moves.filter((m) => !state.dismissed.has(m.job.id + ">" + m.to));
   }
   const tabs = [];
+  if (state.user.role === "manager") tabs.push(["calendar", "Calendar"]);
   if (state.user.role === "manager") tabs.push(["all", "All jobs", state.jobs.filter((j) => isActive(j) && !j.assignee).length]);
   if (state.user.role === "manager") tabs.push(["planner", "Planner", state.advice.moves.length]);
   if (state.user.role === "manager") tabs.push(["planned", "Planned jobs"]);
@@ -286,6 +291,7 @@ function render() {
   if (state.tab === "planner") return renderPlanner();
   if (state.tab === "daily") return renderDaily();
   if (state.tab === "planned") return renderPlanned();
+  if (state.tab === "calendar") return renderCalendar();
   return renderAll();
 }
 
@@ -1111,6 +1117,101 @@ function editPlanned(it) {
       if (!$("#pDel").dataset.sure) { $("#pDel").dataset.sure = "1"; $("#pDel").textContent = "Tap again to delete"; return; }
       try { await api(`recurring/${it.id}/delete`, { method: "POST" }); state.recurring = null; toast("Deleted"); renderPlanned(); } catch (e) { $("#pErr").textContent = e.message; }
     };
+  });
+}
+
+// ---------- calendar (managers): one column per handyman, jobs as blocks through the day
+const PX = 1.2; // pixels per minute
+const SHORT = { lock: "Lock", window: "Window", toilet: "Toilet", water: "Leak", geyser: "Geyser", bed: "Bed", power: "Power", light: "Light", appliance: "Appliance", paint: "Paint", pest: "Baiting", other: "Other" };
+const shortCat = (id) => SHORT[id] || catLabel(id);
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(Math.round(m % 60)).padStart(2, "0")}`;
+function blockClass(j) {
+  if (j.status === "done") return "c-done";
+  if (j.status === "in_progress") return "c-busy";
+  if (j.blocking) return "c-out";
+  if (j.recurringId) return "c-plan";
+  return "c-open";
+}
+
+function renderCalendar() {
+  const plan = state.plan;
+  const d = state.calDay;
+  const { start, end } = state.config.work;
+  const ws = workers();
+  const day = dateAt(d, plan.now);
+  const H = (end - start) * 60 * PX;
+  const nowMin = plan.now.getHours() * 60 + plan.now.getMinutes();
+  const unassigned = state.jobs.filter((j) => isActive(j) && !j.assignee).sort(planOrder);
+  const waiting = state.jobs.filter((j) => j.status === "waiting");
+  const title = d === 0 ? "Today" : d === 1 ? "Tomorrow" : d === -1 ? "Yesterday" : day.toLocaleDateString([], { weekday: "long", day: "numeric", month: "short" });
+
+  const blocksFor = (w) => {
+    const out = [];
+    // fixed jobs on that day, ending when they were marked fixed
+    for (const j of state.jobs.filter((x) => x.status === "done" && x.assignee === w.id && x.doneAt && sameDay(x.doneAt, day))) {
+      const t = new Date(j.doneAt), e = t.getHours() * 60 + t.getMinutes();
+      const m = Math.min(jobMins(j), 240);
+      out.push({ job: j, start: Math.max(start * 60, e - m), mins: Math.max(20, Math.min(m, e - start * 60)) });
+    }
+    if (d >= 0) for (const sg of (plan.person[w.id].segs[d] || [])) out.push(sg);
+    return out.filter((b) => b.start < end * 60).map((b) => {
+      const top = (b.start - start * 60) * PX, h = Math.max(26, Math.min(b.mins, end * 60 - b.start) * PX - 3);
+      const j = b.job;
+      return `<div class="cblock ${blockClass(j)}" data-cal="${j.id}" style="top:${top}px;height:${h}px">
+        <b>${esc(j.building)} ${esc(j.room)}</b><span>${hhmm(b.start)} · ${esc(shortCat(j.category))}</span></div>`;
+    }).join("");
+  };
+
+  $("#app").innerHTML = `
+    <div class="calhead">
+      <button class="btn light small" id="calPrev" ${d <= -7 ? "disabled" : ""}>‹</button>
+      <div class="caltitle"><b>${esc(title)}</b><small>${d === 0 || Math.abs(d) > 1 ? "" : day.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })}</small></div>
+      <button class="btn light small" id="calNext" ${d >= 13 ? "disabled" : ""}>›</button>
+      ${d !== 0 ? `<button class="btn light small" id="calToday">Today</button>` : ""}
+    </div>
+    ${unassigned.length ? `<div class="unstrip"><div class="unlabel">Not assigned (${unassigned.length}) — tap to give to someone</div>
+      <div class="unrow">${unassigned.map((j) => `<button class="cchip ${j.blocking ? "c-out" : "c-open"}" data-cal="${j.id}"><b>${esc(j.building)} ${esc(j.room)}</b><span>${esc(shortCat(j.category))} · ${fmtH(jobMins(j))}</span></button>`).join("")}</div></div>` : ""}
+    <div class="calwrap"><div class="cal" style="--cols:${ws.length}">
+      <div class="ccol gutter"><div class="chead"></div><div class="cbody" style="height:${H}px">
+        ${Array.from({ length: end - start + 1 }, (_, i) => `<div class="hr" style="top:${i * 60 * PX}px">${start + i}:00</div>`).join("")}</div></div>
+      ${ws.map((w) => {
+        const off = dayOffOf(w.id) === day.getDay();
+        const used = d >= 0 ? (plan.person[w.id].used[d] || 0) : 0;
+        return `<div class="ccol"><div class="chead"><b>${esc(w.name)}</b><small>${off ? "Off" : d >= 0 ? fmtH(used) + " booked" : ""}</small></div>
+          <div class="cbody ${off ? "off" : ""}" style="height:${H}px">
+            ${Array.from({ length: end - start }, (_, i) => `<div class="line" style="top:${i * 60 * PX}px"></div>`).join("")}
+            ${off ? `<div class="offtxt">Day off</div>` : blocksFor(w)}
+            ${d === 0 && nowMin > start * 60 && nowMin < end * 60 ? `<div class="nowline" style="top:${(nowMin - start * 60) * PX}px"></div>` : ""}
+          </div></div>`;
+      }).join("")}
+    </div></div>
+    <div class="legend"><span class="c-out">Room out of order</span><span class="c-busy">Busy</span><span class="c-open">To do</span><span class="c-plan">Planned job</span><span class="c-done">Fixed</span></div>
+    ${waiting.length ? `<p class="muted small-note">${waiting.length} job${waiting.length === 1 ? " is" : "s are"} waiting for something and not on the calendar — see All jobs.</p>` : ""}
+    <p class="muted small-note">Times are worked out from each job's set time, most urgent first. Tap a job to see it or give it to someone else.</p>`;
+
+  $("#calPrev").onclick = () => { state.calDay--; renderCalendar(); };
+  $("#calNext").onclick = () => { state.calDay++; renderCalendar(); };
+  if ($("#calToday")) $("#calToday").onclick = () => { state.calDay = 0; renderCalendar(); };
+  document.querySelectorAll("[data-cal]").forEach((el) => (el.onclick = () => calJob(state.jobs.find((j) => j.id === el.dataset.cal))));
+}
+
+function calJob(job) {
+  if (!job) return;
+  const sug = suggest(job.building, job.category);
+  const ws = workers();
+  const canMove = job.status !== "done";
+  openSheet(`${jobCard(job)}
+    ${canMove ? `<label class="f">${job.assignee ? "Give to someone else" : "Give this job to"}</label>
+    <div class="chips">${ws.map((w) => `<button type="button" class="chip ${job.assignee === w.id ? "on" : ""}" data-give="${w.id}">${esc(w.name)}${w.id === sug ? " ★" : ""}${w.can.includes(job.category) ? "" : " (not his skill)"}</button>`).join("")}
+      <button type="button" class="chip" data-give="contractor">Outside contractor</button></div>
+    <p class="muted" style="font-size:13px;margin:4px">★ = usual person for this building and job.</p>` : ""}
+    <button class="btn light block" data-close style="margin-top:10px">Close</button>`, (s) => {
+    s.querySelectorAll(".job [data-act]").forEach((b) => (b.onclick = () => onAction(job, b.dataset.act)));
+    s.querySelectorAll("img[data-full]").forEach((img) => (img.onclick = () => window.open(img.dataset.full, "_blank")));
+    s.querySelectorAll("[data-give]").forEach((b) => (b.onclick = async () => {
+      if (b.dataset.give === job.assignee) return;
+      try { await doUpdate(job, { action: "assign", assignee: b.dataset.give }); toast(`${job.building} ${job.room} given to ${teamName(b.dataset.give)}`); } catch (e) { toast(e.message); }
+    }));
   });
 }
 
