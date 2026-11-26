@@ -272,8 +272,17 @@ function render() {
     return;
   }
 
-  $("#who").innerHTML = `${esc(state.user.name)}<button id="logout">Log out</button>`;
+  $("#who").innerHTML = `${esc(state.user.name)}${state.config.demo ? "" : `<button id="mypin">My PIN</button>`}<button id="logout">Log out</button>`;
   $("#logout").onclick = logout;
+  if ($("#mypin")) $("#mypin").onclick = () => pinSheet(false);
+  if (state.config.mustSetPin) {
+    $("#tabs").innerHTML = "";
+    $("#banner").innerHTML = "";
+    document.body.classList.remove("navtop");
+    app.innerHTML = setPinView(true);
+    wireSetPin(true);
+    return;
+  }
   $("#banner").innerHTML = state.config.demo
     ? `<div class="warn"><b>Test mode:</b> demo PINs are switched on. Set your own staff PINs in Netlify before real use.</div>`
     : "";
@@ -731,7 +740,9 @@ function renderPlanner() {
       ${ws.map((w) => `<div class="dayoff"><span>${esc(w.name)}</span><select data-off="${w.id}">
         <option value="">Not set</option>${DAYS.map((n, i) => `<option value="${i}" ${dayOffOf(w.id) === i ? "selected" : ""}>${n}</option>`).join("")}</select></div>`).join("")}
       <button class="btn gold block" id="saveOff" style="margin-top:12px">Save days off</button>
-    </div>`;
+    </div>
+    <h3>Staff logins</h3>
+    <div class="card" id="staffLogins"><p class="muted">Loading…</p></div>`;
 
   document.querySelectorAll("[data-move]").forEach((b) => (b.onclick = async () => {
     const m = moves[+b.dataset.move];
@@ -753,6 +764,7 @@ function renderPlanner() {
       });
     });
   }));
+  renderStaffLogins();
   $("#saveOff").onclick = async () => {
     const daysOff = {};
     document.querySelectorAll("[data-off]").forEach((s) => (daysOff[s.dataset.off] = s.value === "" ? null : +s.value));
@@ -1238,6 +1250,61 @@ function calJob(job) {
       try { await doUpdate(job, { action: "assign", assignee: b.dataset.give }); toast(`${job.building} ${job.room} given to ${teamName(b.dataset.give)}`); } catch (e) { toast(e.message); }
     }));
   });
+}
+
+// ---------- choose your own PIN
+function setPinView(first) {
+  return `<form id="pinForm" class="login">
+    <h2>${first ? "Choose your own PIN" : "Change my PIN"}</h2>
+    <p class="muted">${first ? `Welcome, ${esc(state.user.name)}. Please choose your own PIN so only you know it. You will use it from now on.` : "Choose a new PIN. Your old one will stop working."}</p>
+    <label class="f" for="np1">New PIN (4 to 8 numbers)</label>
+    <input id="np1" class="pin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" required>
+    <label class="f" for="np2">Type it again</label>
+    <input id="np2" class="pin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" required>
+    <button id="pinSave" class="btn gold block">Save my PIN</button>
+    ${first ? "" : `<button type="button" class="btn light block" data-close style="margin-top:8px">Cancel</button>`}
+    <p id="pinErr" style="color:var(--red);min-height:1.4em"></p>
+    <p class="muted" style="font-size:13px">Don't use 1234, 0000 or your birthday. If you forget it, a manager can reset it.</p>
+  </form>`;
+}
+function wireSetPin(first, root = document) {
+  const f = root.querySelector("#pinForm");
+  root.querySelector("#np1").focus();
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const a = root.querySelector("#np1").value.trim(), b = root.querySelector("#np2").value.trim(), errEl = root.querySelector("#pinErr");
+    if (!/^\d{4,8}$/.test(a)) { errEl.textContent = "Use 4 to 8 numbers"; return; }
+    if (a !== b) { errEl.textContent = "The two PINs are not the same"; return; }
+    root.querySelector("#pinSave").disabled = true;
+    try {
+      await api("mypin", { method: "POST", body: { pin: a } });
+      state.config.mustSetPin = false;
+      toast("Your PIN is saved. Use it next time you log in.");
+      if (!first) $("#sheet").classList.add("hidden");
+      if (!state.tab) state.tab = defaultTab();
+      render();
+    } catch (er) { errEl.textContent = er.message; root.querySelector("#pinSave").disabled = false; }
+  };
+}
+function pinSheet() {
+  openSheet(setPinView(false), (s) => wireSetPin(false, s));
+}
+
+async function renderStaffLogins() {
+  const box = $("#staffLogins");
+  if (!box) return;
+  try {
+    const r = await api("pins");
+    if (r.demo) { box.innerHTML = `<p class="muted">Available once the staff PIN list is in Netlify.</p>`; return; }
+    const done = r.people.filter((x) => x.ownSet).length;
+    box.innerHTML = `<p class="muted" style="margin:0 0 8px">${done} of ${r.people.length} have chosen their own PIN. Someone who forgot theirs: tap Reset, and they log in again with their starting PIN from the list.</p>
+      ${r.people.map((x) => `<div class="dayoff"><span>${esc(x.name)} <small class="muted">· ${esc(x.role)}</small></span>
+        ${x.ownSet ? `<span class="row"><span class="badge b-done">Own PIN set</span><button class="btn light small" data-reset="${esc(x.name)}">Reset</button></span>` : `<span class="badge b-time">Starting PIN</span>`}</div>`).join("")}`;
+    box.querySelectorAll("[data-reset]").forEach((b) => (b.onclick = async () => {
+      if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "Tap again to reset"; return; }
+      try { await api("pins/reset", { method: "POST", body: { name: b.dataset.reset } }); toast(`${b.dataset.reset} can log in with their starting PIN again`); renderStaffLogins(); } catch (e) { toast(e.message); }
+    }));
+  } catch (e) { box.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
 }
 
 // refresh every minute while the app is open (not while typing a report or using a pop-up)

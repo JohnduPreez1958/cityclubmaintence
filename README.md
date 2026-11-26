@@ -119,7 +119,9 @@ In Netlify go to **Site configuration → Environment variables → Add a variab
 
 Then go to **Deploys → Trigger deploy**. The yellow test-mode banner disappears.
 
-Staff PINs are set in Netlify under Manage → Keys and secrets → STAFF_PINS. Use 4-digit PINs (or longer). After 5 wrong PINs in a row, that phone is locked out of logging in for 15 minutes, so PINs can't be guessed.
+Staff PINs are set in Netlify under Manage → Keys and secrets → STAFF_PINS. Use 4-digit PINs (or longer).
+
+**Everyone chooses their own PIN.** The PIN in the list is only a starting PIN: the first time someone logs in with it, the app asks them to choose their own (4 to 8 numbers) before they can do anything else, and from then on their starting PIN no longer works. Anyone can change it later with **My PIN** at the top. Managers see who has set their own PIN under **Planner → Staff logins**, and can **Reset** someone who forgot theirs; they then log in with their starting PIN again and choose a new one. After 5 wrong PINs in a row, that phone is locked out of logging in for 15 minutes, so PINs can't be guessed.
 
 ### The Maintenance tab on cityclubhotels.co.za
 
