@@ -285,3 +285,27 @@ details.more .row { margin-top: 6px; }
 
 .hhead { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
 .hhead .at { font-weight: 700; font-size: 15px; color: var(--ink-2); background: #eef0f2; border-radius: 8px; padding: 3px 8px; white-space: nowrap; }
+
+/* managers: menu across the top, under the header */
+body.navtop .top { position: static; }
+body.navtop nav#tabs { position: sticky; top: 0; bottom: auto; justify-content: center; align-items: center; gap: 4px;
+  border-top: 0; border-bottom: 1px solid var(--line); box-shadow: 0 2px 8px rgba(0,0,0,.04); padding: 6px 8px; }
+body.navtop nav#tabs button { flex: 0 1 auto; max-width: none; flex-direction: row; gap: 7px; padding: 8px 14px; border-radius: 10px; }
+body.navtop nav#tabs button.on { background: #f3ead9; }
+body.navtop nav#tabs .ico { height: 22px; }
+body.navtop nav#tabs .ico svg { width: 20px; height: 20px; }
+body.navtop nav#tabs .lbl { font-size: 14px; }
+body.navtop nav#tabs button.plus { background: var(--gold); color: #1b1309; margin: 0 6px; }
+body.navtop nav#tabs button.plus .ico { width: auto; height: 22px; margin: 0; border: 0; box-shadow: none; background: transparent; display: block; }
+body.navtop nav#tabs button.plus .ico svg { width: 20px; height: 20px; }
+body.navtop nav#tabs button.plus .lbl { color: #1b1309; font-weight: 700; }
+body.navtop nav#tabs .count { position: static; margin-left: 2px; }
+body.navtop main { padding-bottom: 40px !important; }
+body.navtop .toast { bottom: 24px; }
+@media (max-width: 560px) {
+  /* phones: all six fit across the top, icon above the word */
+  body.navtop nav#tabs { justify-content: space-between; gap: 0; padding: 4px 2px; }
+  body.navtop nav#tabs button { flex: 1 1 0; flex-direction: column; gap: 2px; padding: 6px 1px; border-radius: 8px; }
+  body.navtop nav#tabs .lbl { font-size: 11px; }
+  body.navtop nav#tabs button.plus { margin: 0 2px; }
+}
