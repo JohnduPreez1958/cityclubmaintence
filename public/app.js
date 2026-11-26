@@ -295,6 +295,8 @@ function render() {
   } else {
     tabs.push(["status", ICON.status, "Job status"], ["report", ICON.plus, "Report"]);
   }
+  // managers (often on a laptop) get the menu across the top; handymen and staff keep the phone-style bar at the bottom
+  document.body.classList.toggle("navtop", r === "manager");
   $("#tabs").innerHTML = tabs
     .map(([id, icon, label, n]) => `<button data-tab="${id}" class="${state.tab === id ? "on" : ""} ${id === "report" ? "plus" : ""}">
       <span class="ico">${icon}</span><span class="lbl">${label}</span>${n ? `<span class="count">${n}</span>` : ""}</button>`)
