@@ -33,7 +33,10 @@ The first tab for managers. One column per handyman, the working day down the si
 
 - Arrows move between days (up to a week back and two weeks ahead).
 - Jobs nobody has yet are listed at the top. Tap one, or any block, to see the job and give it to someone (★ marks the usual person).
-- Times are worked out from each job's set time, most urgent first.
+- **Drag a job** to another person's column and/or another time to book it there (on a phone: press and hold, then drag). Booked jobs show 📌 and stay at that time; the rest of the person's jobs fill the free time around them. Jobs nobody has yet can be dragged from the strip at the top.
+- Or tap a job and use **Book a set time** (day and time), or **back to automatic**.
+- Giving a job to someone with the name buttons puts it back to automatic time in their day.
+- Times are otherwise worked out from each job's set time, most urgent first.
 
 ## What a handyman sees
 
