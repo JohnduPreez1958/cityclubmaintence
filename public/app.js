@@ -91,27 +91,51 @@ function capacity(id, d, now) {
 const planOrder = (a, b) => ((b.status === "in_progress") - (a.status === "in_progress")) || (b.blocking - a.blocking) || (a.createdAt - b.createdAt);
 
 // Fills each person's working days with their jobs, most urgent first.
+function dayIndexOf(dateStr, now) {
+  const [y, m, dd] = dateStr.split("-").map(Number);
+  return Math.round((new Date(y, m - 1, dd, 12) - dateAt(0, now)) / 864e5);
+}
+
+// Works out each handyman's days. Jobs a manager booked at a set time sit there;
+// the rest fill the free time around them, most urgent first.
 function buildPlan(now = new Date()) {
   const plan = { person: {}, jobDay: {}, now };
+  const endMin = state.config.work.end * 60;
   for (const w of workers()) {
-    const queue = state.jobs.filter((j) => isActive(j) && j.status !== "waiting" && j.assignee === w.id).sort(planOrder);
-    const used = [], jobsByDay = [], segs = [];
+    const all = state.jobs.filter((j) => isActive(j) && j.status !== "waiting" && j.assignee === w.id).sort(planOrder);
+    const used = [], jobsByDay = [], segs = [], busy = [];
+    const add = (d, j, start, mins, pinned) => {
+      (segs[d] = segs[d] || []).push({ job: j, start, mins, pinned });
+      used[d] = (used[d] || 0) + mins;
+      if (!(jobsByDay[d] = jobsByDay[d] || []).includes(j)) jobsByDay[d].push(j);
+      if (plan.jobDay[j.id] === undefined) plan.jobDay[j.id] = d;
+    };
+    const queue = [];
+    for (const j of all) {
+      const d = j.slot ? dayIndexOf(j.slot.date, now) : -1;
+      if (j.slot && d >= 0 && d < HORIZON) {
+        const m = Math.min(jobMins(j), endMin - j.slot.start);
+        add(d, j, j.slot.start, m, true);
+        (busy[d] = busy[d] || []).push([j.slot.start, j.slot.start + m]);
+      } else queue.push(j);
+    }
     const dayStartMin = (d) => d === 0 ? Math.max(state.config.work.start * 60, now.getHours() * 60 + now.getMinutes()) : state.config.work.start * 60;
-    let d = 0, rem = capacity(w.id, 0, now), clock = dayStartMin(0);
+    let d = 0, clock = dayStartMin(0);
     for (const j of queue) {
-      let m = jobMins(j), first = true;
+      let m = jobMins(j);
       while (m > 0 && d < HORIZON) {
-        if (rem <= 0) { d++; rem = capacity(w.id, d, now); clock = dayStartMin(d); continue; }
-        if (first) { plan.jobDay[j.id] = d; first = false; }
-        const t = Math.min(m, rem);
-        (segs[d] = segs[d] || []).push({ job: j, start: clock, mins: t });
-        clock += t;
-        rem -= t; m -= t;
-        used[d] = (used[d] || 0) + t;
-        (jobsByDay[d] = jobsByDay[d] || []).push(j);
+        if (capacity(w.id, d, now) === 0 || clock >= endMin) { d++; clock = dayStartMin(d); continue; }
+        const inside = (busy[d] || []).find(([s, e]) => clock >= s && clock < e);
+        if (inside) { clock = inside[1]; continue; }
+        const limit = Math.min(endMin, ...(busy[d] || []).filter(([s]) => s > clock).map(([s]) => s));
+        const t = Math.min(m, limit - clock);
+        if (t <= 0) { clock = limit; continue; }
+        add(d, j, clock, t, false);
+        clock += t; m -= t;
       }
     }
-    const lastDay = queue.length ? Math.max(...queue.map((j) => plan.jobDay[j.id] ?? 0)) : -1;
+    for (const sg of segs) if (sg) sg.sort((x, y) => x.start - y.start);
+    const lastDay = all.length ? Math.max(...all.map((j) => plan.jobDay[j.id] ?? 0)) : -1;
     plan.person[w.id] = { used, jobsByDay, lastDay, segs };
   }
   return plan;
@@ -1159,6 +1183,7 @@ function editPlanned(it) {
 
 // ---------- calendar (managers): one column per handyman, jobs as blocks through the day
 const PX = 1.2; // pixels per minute
+const TEAM_IDS = () => workers().map((w) => w.id);
 const SHORT = { lock: "Lock", window: "Window", toilet: "Toilet", water: "Leak", geyser: "Geyser", bed: "Bed", power: "Power", light: "Light", appliance: "Appliance", paint: "Paint", pest: "Baiting", other: "Other" };
 const shortCat = (id) => SHORT[id] || catLabel(id);
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(Math.round(m % 60)).padStart(2, "0")}`;
@@ -1194,8 +1219,8 @@ function renderCalendar() {
     return out.filter((b) => b.start < end * 60).map((b) => {
       const top = (b.start - start * 60) * PX, h = Math.max(26, Math.min(b.mins, end * 60 - b.start) * PX - 3);
       const j = b.job;
-      return `<div class="cblock ${blockClass(j)}" data-cal="${j.id}" style="top:${top}px;height:${h}px">
-        <b>${esc(j.building)} ${esc(j.room)}</b><span>${hhmm(b.start)} · ${esc(shortCat(j.category))}</span></div>`;
+      return `<div class="cblock ${blockClass(j)} ${j.status !== "done" ? "draggable" : ""}" data-cal="${j.id}" style="top:${top}px;height:${h}px">
+        <b>${esc(j.building)} ${esc(j.room)}</b><span>${b.pinned ? "📌 " : ""}${hhmm(b.start)} · ${esc(shortCat(j.category))}</span></div>`;
     }).join("");
   };
 
@@ -1207,7 +1232,7 @@ function renderCalendar() {
       ${d !== 0 ? `<button class="btn light small" id="calToday">Today</button>` : ""}
     </div>
     ${unassigned.length ? `<div class="unstrip"><div class="unlabel">Not assigned (${unassigned.length}) — tap to give to someone</div>
-      <div class="unrow">${unassigned.map((j) => `<button class="cchip ${j.blocking ? "c-out" : "c-open"}" data-cal="${j.id}"><b>${esc(j.building)} ${esc(j.room)}</b><span>${esc(shortCat(j.category))} · ${fmtH(jobMins(j))}</span></button>`).join("")}</div></div>` : ""}
+      <div class="unrow">${unassigned.map((j) => `<button class="cchip draggable ${j.blocking ? "c-out" : "c-open"}" data-cal="${j.id}"><b>${esc(j.building)} ${esc(j.room)}</b><span>${esc(shortCat(j.category))} · ${fmtH(jobMins(j))}</span></button>`).join("")}</div></div>` : ""}
     <div class="calwrap"><div class="cal" style="--cols:${ws.length}">
       <div class="ccol gutter"><div class="chead"></div><div class="cbody" style="height:${H}px">
         ${Array.from({ length: end - start + 1 }, (_, i) => `<div class="hr" style="top:${i * 60 * PX}px">${start + i}:00</div>`).join("")}</div></div>
@@ -1215,7 +1240,7 @@ function renderCalendar() {
         const off = dayOffOf(w.id) === day.getDay();
         const used = d >= 0 ? (plan.person[w.id].used[d] || 0) : 0;
         return `<div class="ccol"><div class="chead"><b>${esc(w.name)}</b><small>${off ? "Off" : d >= 0 ? fmtH(used) + " booked" : ""}</small></div>
-          <div class="cbody ${off ? "off" : ""}" style="height:${H}px">
+          <div class="cbody ${off ? "off" : ""}" data-w="${w.id}" ${off ? "data-off=\"1\"" : ""} style="height:${H}px">
             ${Array.from({ length: end - start }, (_, i) => `<div class="line" style="top:${i * 60 * PX}px"></div>`).join("")}
             ${off ? `<div class="offtxt">Day off</div>` : blocksFor(w)}
             ${d === 0 && nowMin > start * 60 && nowMin < end * 60 ? `<div class="nowline" style="top:${(nowMin - start * 60) * PX}px"></div>` : ""}
@@ -1224,12 +1249,87 @@ function renderCalendar() {
     </div></div>
     <div class="legend"><span class="c-out">Room out of order</span><span class="c-busy">Busy</span><span class="c-open">To do</span><span class="c-plan">Planned job</span><span class="c-done">Fixed</span></div>
     ${waiting.length ? `<p class="muted small-note">${waiting.length} job${waiting.length === 1 ? " is" : "s are"} waiting for something and not on the calendar — see All jobs.</p>` : ""}
-    <p class="muted small-note">Times are worked out from each job's set time, most urgent first. Tap a job to see it or give it to someone else.</p>`;
+    <p class="muted small-note">Drag a job to another person or time (on a phone: press and hold, then drag). 📌 = a time you booked; the rest are worked out from each job's set time, most urgent first. Tap a job to see it.</p>`;
 
   $("#calPrev").onclick = () => { state.calDay--; renderCalendar(); };
   $("#calNext").onclick = () => { state.calDay++; renderCalendar(); };
   if ($("#calToday")) $("#calToday").onclick = () => { state.calDay = 0; renderCalendar(); };
-  document.querySelectorAll("[data-cal]").forEach((el) => (el.onclick = () => calJob(state.jobs.find((j) => j.id === el.dataset.cal))));
+  document.querySelectorAll("[data-cal]").forEach((el) => {
+    const job = state.jobs.find((j) => j.id === el.dataset.cal);
+    if (job && job.status !== "done" && d >= 0) enableDrag(el, job, day);
+    else el.onclick = () => calJob(job);
+  });
+}
+
+// Drag a job on the calendar to another person and/or time. Mouse: just drag.
+// Touch: press and hold for a moment, then drag (so normal scrolling still works).
+function enableDrag(el, job, day) {
+  const { start, end } = state.config.work;
+  let sx = 0, sy = 0, dragging = false, timer = null, ghost = null, grabY = 0, pid = null, target = null, mins = null;
+  const pickTarget = (x, y) => {
+    const under = document.elementFromPoint(x, y);
+    const col = under && under.closest(".cbody[data-w]");
+    document.querySelectorAll(".cbody.droptarget").forEach((c) => c !== col && c.classList.remove("droptarget"));
+    if (!col || col.dataset.off) { target = null; return; }
+    col.classList.add("droptarget");
+    const r = col.getBoundingClientRect();
+    let m = start * 60 + Math.round((y - grabY - r.top) / PX / 15) * 15;
+    m = Math.max(start * 60, Math.min(end * 60 - 15, m));
+    target = col.dataset.w; mins = m;
+  };
+  const begin = (x, y) => {
+    dragging = true;
+    const r = el.getBoundingClientRect();
+    grabY = el.classList.contains("cchip") ? 10 : y - r.top;
+    ghost = el.cloneNode(true);
+    ghost.classList.add("ghost");
+    Object.assign(ghost.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: Math.max(r.width, 90) + "px", height: el.classList.contains("cchip") ? "auto" : r.height + "px" });
+    document.body.appendChild(ghost);
+    el.classList.add("dragging");
+    document.addEventListener("touchmove", stopScroll, { passive: false });
+    move(x, y);
+  };
+  const move = (x, y) => {
+    ghost.style.transform = `translate(${x - sx}px, ${y - sy}px)`;
+    pickTarget(x, y);
+    const lab = ghost.querySelector("span");
+    if (lab) lab.textContent = target ? `${teamName(target)} · ${hhmm(mins)}` : "Drop on a person's column";
+  };
+  const stopScroll = (e) => e.preventDefault();
+  const finish = async () => {
+    clearTimeout(timer);
+    document.removeEventListener("touchmove", stopScroll);
+    document.querySelectorAll(".cbody.droptarget").forEach((c) => c.classList.remove("droptarget"));
+    if (ghost) ghost.remove();
+    el.classList.remove("dragging");
+    if (!dragging) return;
+    dragging = false;
+    if (!target) return;
+    try {
+      await doUpdate(job, { action: "schedule", assignee: target, date: ymd(day), start: mins });
+      toast(`${job.building} ${job.room} → ${teamName(target)} at ${hhmm(mins)}`);
+    } catch (e) { toast(e.message); }
+  };
+  el.onclick = (e) => { if (el.dataset.justDragged) { delete el.dataset.justDragged; return; } calJob(job); };
+  el.addEventListener("pointerdown", (e) => {
+    if (e.button && e.button !== 0) return;
+    sx = e.clientX; sy = e.clientY; pid = e.pointerId; dragging = false;
+    if (e.pointerType === "touch") timer = setTimeout(() => { begin(sx, sy); if (navigator.vibrate) navigator.vibrate(15); }, 350);
+  });
+  el.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== pid) return;
+    const far = Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 6;
+    if (!dragging) {
+      if (e.pointerType === "touch") { if (far) clearTimeout(timer); return; }
+      if (far && e.buttons === 1) { el.setPointerCapture(e.pointerId); begin(e.clientX, e.clientY); }
+      return;
+    }
+    e.preventDefault();
+    move(e.clientX, e.clientY);
+  });
+  el.addEventListener("pointerup", (e) => { if (dragging) { el.dataset.justDragged = "1"; } finish(); pid = null; });
+  el.addEventListener("pointercancel", () => { dragging = false; finish(); pid = null; });
+  if (window.matchMedia("(pointer: coarse)").matches) el.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
 function calJob(job) {
@@ -1241,10 +1341,21 @@ function calJob(job) {
     ${canMove ? `<label class="f">${job.assignee ? "Give to someone else" : "Give this job to"}</label>
     <div class="chips">${ws.map((w) => `<button type="button" class="chip ${job.assignee === w.id ? "on" : ""}" data-give="${w.id}">${esc(w.name)}${w.id === sug ? " ★" : ""}${w.can.includes(job.category) ? "" : " (not his skill)"}</button>`).join("")}
       <button type="button" class="chip" data-give="contractor">Outside contractor</button></div>
-    <p class="muted" style="font-size:13px;margin:4px">★ = usual person for this building and job.</p>` : ""}
+    <p class="muted" style="font-size:13px;margin:4px">★ = usual person for this building and job.</p>
+    ${job.assignee && TEAM_IDS().includes(job.assignee) ? `<label class="f">Book a set time</label>
+    <div class="row"><select id="bkDay" class="t">${Array.from({ length: 14 }, (_, i) => `<option value="${ymd(dateAt(i))}" ${job.slot && job.slot.date === ymd(dateAt(i)) ? "selected" : ""}>${dayLabel(i, true)}</option>`).join("")}</select>
+      <select id="bkTime" class="t">${Array.from({ length: (state.config.work.end - state.config.work.start) * 4 }, (_, i) => state.config.work.start * 60 + i * 15).map((m) => `<option value="${m}" ${job.slot && job.slot.start === m ? "selected" : ""}>${hhmm(m)}</option>`).join("")}</select>
+      <button class="btn small" id="bkSave">Book</button></div>
+    ${job.slot ? `<button class="btn light small" id="bkClear" style="margin-top:6px">📌 Booked ${esc(job.slot.date)} ${hhmm(job.slot.start)} — back to automatic</button>` : ""}` : ""}` : ""}
     <button class="btn light block" data-close style="margin-top:10px">Close</button>`, (s) => {
     s.querySelectorAll(".job [data-act]").forEach((b) => (b.onclick = () => onAction(job, b.dataset.act)));
     s.querySelectorAll("img[data-full]").forEach((img) => (img.onclick = () => window.open(img.dataset.full, "_blank")));
+    if (s.querySelector("#bkSave")) s.querySelector("#bkSave").onclick = async () => {
+      try { await doUpdate(job, { action: "schedule", assignee: job.assignee, date: s.querySelector("#bkDay").value, start: +s.querySelector("#bkTime").value }); toast("Time booked"); } catch (e) { toast(e.message); }
+    };
+    if (s.querySelector("#bkClear")) s.querySelector("#bkClear").onclick = async () => {
+      try { await doUpdate(job, { action: "unschedule" }); toast("Back to automatic time"); } catch (e) { toast(e.message); }
+    };
     s.querySelectorAll("[data-give]").forEach((b) => (b.onclick = async () => {
       if (b.dataset.give === job.assignee) return;
       try { await doUpdate(job, { action: "assign", assignee: b.dataset.give }); toast(`${job.building} ${job.room} given to ${teamName(b.dataset.give)}`); } catch (e) { toast(e.message); }

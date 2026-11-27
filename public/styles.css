@@ -309,3 +309,9 @@ body.navtop .toast { bottom: 24px; }
   body.navtop nav#tabs .lbl { font-size: 11px; }
   body.navtop nav#tabs button.plus { margin: 0 2px; }
 }
+
+/* dragging jobs on the calendar */
+.draggable { cursor: grab; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.cblock.dragging, .cchip.dragging { opacity: .35; }
+.ghost { z-index: 50; pointer-events: none; opacity: .92; box-shadow: 0 8px 20px rgba(0,0,0,.25); border-radius: 8px; cursor: grabbing; }
+.cbody.droptarget { background: #fbf3e2; outline: 2px dashed var(--gold); outline-offset: -2px; }
